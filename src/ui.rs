@@ -1,199 +1,90 @@
 use dioxus::prelude::*;
-use crate::domain::{DashboardSnapshot, ModuleCounts, SciProfile, TaskItem, TaskState};
-use crate::server::{dashboard_snapshot, get_sci_profile, module_counts, run_anticipation_cycle, update_sci_profile};
+use rust_decimal::Decimal;
+use crate::domain::{AssociateItem, DashboardSnapshot, ModuleCounts, OnboardingStatus, PropertyItem, SciProfile, TaskItem, TaskState, TenantItem};
+use crate::server::{create_associate, create_property, create_tenant, create_unit, dashboard_snapshot, get_sci_profile, list_associates, list_properties, list_tenants, module_counts, onboarding_status, run_anticipation_cycle, update_sci_profile};
 
 const CSS: Asset = asset!("/assets/main.css");
 
 #[derive(Clone, Copy, PartialEq)]
-enum Page { Dashboard, Setup, Patrimony, Rentals, Billing, Bank, Vat, Calendar, Automations }
-
-impl Page {
-    fn label(self) -> &'static str { match self { Page::Dashboard=>"Vue d'ensemble", Page::Setup=>"Configuration SCI", Page::Patrimony=>"Patrimoine", Page::Rentals=>"Locations", Page::Billing=>"Facturation", Page::Bank=>"Banque", Page::Vat=>"TVA", Page::Calendar=>"Calendrier fiscal", Page::Automations=>"Automatisations" } }
-}
+enum Page { Dashboard, Setup, Associates, Patrimony, Rentals, Billing, Bank, Vat, Calendar, Automations }
+impl Page { fn label(self)->&'static str{match self{Page::Dashboard=>"Vue d’ensemble",Page::Setup=>"Mise en route",Page::Associates=>"Associés",Page::Patrimony=>"Patrimoine",Page::Rentals=>"Locations",Page::Billing=>"Facturation",Page::Bank=>"Banque",Page::Vat=>"TVA",Page::Calendar=>"Calendrier fiscal",Page::Automations=>"Automatisations"}} }
 
 #[component]
-pub fn App() -> Element {
-    let mut page = use_signal(|| Page::Dashboard);
-    rsx! {
-        document::Link { rel: "stylesheet", href: CSS }
-        div { class: "app-shell",
-            aside { class: "sidebar",
-                div { class: "brand", "SCI FAMILY" }
-                div { class: "brand-sub", "PILOTAGE AUTONOME" }
-                nav {
-                    NavItem { page, current: Page::Dashboard }
-                    NavItem { page, current: Page::Setup }
-                    NavItem { page, current: Page::Patrimony }
-                    NavItem { page, current: Page::Rentals }
-                    NavItem { page, current: Page::Billing }
-                    NavItem { page, current: Page::Bank }
-                    NavItem { page, current: Page::Vat }
-                    NavItem { page, current: Page::Calendar }
-                    NavItem { page, current: Page::Automations }
-                }
-                div { class: "sidebar-footer", "Mode autonome • données locales • audit" }
-            }
-            main { class: "main",
-                header { class: "topbar",
-                    div { div { class: "eyebrow", "SCI FAMILY PILOT" }, h1 { {page().label()} } }
-                    div { class: "top-actions",
-                        button { class: "secondary", onclick: move |_| page.set(Page::Setup), "Configurer la SCI" }
-                        button { class: "primary", onclick: move |_| async move { let _ = run_anticipation_cycle().await; }, "Lancer l’anticipation" }
-                    }
-                }
-                match page() {
-                    Page::Dashboard => rsx! { Dashboard { on_setup: move |_| page.set(Page::Setup) } },
-                    Page::Setup => rsx! { SetupPage {} },
-                    Page::Patrimony => rsx! { ModulePage { title: "Patrimoine", kicker: "BIENS • LOTS • STRUCTURE", focus: "properties" } },
-                    Page::Rentals => rsx! { ModulePage { title: "Locations", kicker: "BAUX • LOCATAIRES • INDEXATIONS", focus: "leases" } },
-                    Page::Billing => rsx! { ModulePage { title: "Facturation", kicker: "LOYERS • QUITTANCES • ENCAISSEMENTS", focus: "invoices" } },
-                    Page::Bank => rsx! { ModulePage { title: "Banque", kicker: "IMPORT • RAPPROCHEMENT • CONTRÔLE", focus: "bank" } },
-                    Page::Vat => rsx! { ModulePage { title: "TVA", kicker: "ENCAISSEMENTS • EXIGIBILITÉ • DÉCLARATION", focus: "vat" } },
-                    Page::Calendar => rsx! { CalendarPage {} },
-                    Page::Automations => rsx! { AutomationPage {} },
-                }
-            }
-        }
+pub fn App()->Element{
+    let mut page=use_signal(||Page::Dashboard);
+    rsx!{document::Link{rel:"stylesheet",href:CSS} div{class:"app-shell",
+        aside{class:"sidebar",div{class:"brand","SCI FAMILY"},div{class:"brand-sub","PILOTAGE ADMINISTRATIF AUTONOME"},nav{
+            NavItem{page,current:Page::Dashboard} NavItem{page,current:Page::Setup} NavItem{page,current:Page::Associates} NavItem{page,current:Page::Patrimony} NavItem{page,current:Page::Rentals} NavItem{page,current:Page::Billing} NavItem{page,current:Page::Bank} NavItem{page,current:Page::Vat} NavItem{page,current:Page::Calendar} NavItem{page,current:Page::Automations}
+        },div{class:"sidebar-footer","Données locales • règles versionnées • audit"}}
+        main{class:"main",header{class:"topbar",div{div{class:"eyebrow","SCI FAMILY PILOT"},h1{{page().label()}}},div{class:"top-actions",button{class:"secondary",onclick:move |_|page.set(Page::Setup),"Mise en route"},button{class:"primary",onclick:move |_|async move{let _=run_anticipation_cycle().await;},"Lancer l’anticipation"}}}
+        match page(){
+            Page::Dashboard=>rsx!{Dashboard{go_setup:move |_|page.set(Page::Setup)}},
+            Page::Setup=>rsx!{SetupPage{}},
+            Page::Associates=>rsx!{AssociatesPage{}},
+            Page::Patrimony=>rsx!{PatrimonyPage{}},
+            Page::Rentals=>rsx!{RentalsPage{}},
+            Page::Billing=>rsx!{ModulePage{title:"Facturation",kicker:"LOYERS • FACTURES • ENCAISSEMENTS",detail:"Le prochain flux préparera automatiquement les factures selon les baux actifs et calculera la TVA exigible à partir des encaissements."}},
+            Page::Bank=>rsx!{ModulePage{title:"Banque",kicker:"IMPORT • RAPPROCHEMENT • CONTRÔLE",detail:"Le moteur de rapprochement détectera les mouvements non affectés et préparera des propositions avant validation du gérant."}},
+            Page::Vat=>rsx!{ModulePage{title:"TVA",kicker:"ENCAISSEMENT • EXIGIBILITÉ • DÉCLARATION",detail:"Le poste TVA suivra l’exigibilité réellement déclenchée par les encaissements et préparera les éléments de déclaration."}},
+            Page::Calendar=>rsx!{ModulePage{title:"Calendrier fiscal",kicker:"ÉCHÉANCES • PRÉPARATION • RELANCES",detail:"Les échéances vérifiées seront reliées aux tâches préparatoires, aux documents attendus et à la trésorerie prévisionnelle."}},
+            Page::Automations=>rsx!{AutomationPage{}}
+        }}
+    }}
+}
+
+#[component]fn NavItem(page:Signal<Page>,current:Page)->Element{rsx!{button{class:if page()==current{"nav-item active"}else{"nav-item"},onclick:move |_|page.set(current),{current.label()}}}}
+
+#[component]fn Dashboard(go_setup:EventHandler<MouseEvent>)->Element{
+    let snapshot=use_resource(||async move{dashboard_snapshot().await.ok()}); let counts=use_resource(||async move{module_counts().await.ok()}); let onboarding=use_resource(||async move{onboarding_status().await.ok()});
+    match (&*snapshot.read(),&*counts.read(),&*onboarding.read()){
+        (Some(Some(data)),Some(Some(counts)),Some(Some(status)))=>rsx!{DashboardContent{data:data.clone(),counts:counts.clone(),status:status.clone(),go_setup}},
+        _=>rsx!{div{class:"loading-grid",div{class:"hero-card skeleton"},div{class:"metric-row",for _ in 0..4{div{class:"metric skeleton"}}}}}
     }
 }
 
-#[component]
-fn NavItem(page: Signal<Page>, current: Page) -> Element {
-    rsx! { button { class: if page() == current { "nav-item active" } else { "nav-item" }, onclick: move |_| page.set(current), {current.label()} } }
-}
-
-#[component]
-fn Dashboard(on_setup: EventHandler<MouseEvent>) -> Element {
-    let snapshot = use_resource(|| async move { dashboard_snapshot().await.ok() });
-    let counts = use_resource(|| async move { module_counts().await.ok() });
-    match (&*snapshot.read(), &*counts.read()) {
-        (Some(Some(data)), Some(Some(counts))) => rsx! { DashboardContent { data: data.clone(), counts: counts.clone(), on_setup } },
-        _ => rsx! { div { class: "loading-grid", div { class: "hero-card skeleton" }, div { class: "metric-row", for _ in 0..4 { div { class: "metric skeleton" } } } } }
+#[component]fn DashboardContent(data:DashboardSnapshot,counts:ModuleCounts,status:OnboardingStatus,go_setup:EventHandler<MouseEvent>)->Element{
+    rsx!{
+        if !status.completed{section{class:"setup-banner",div{div{class:"eyebrow","MISE EN ROUTE • {status.completion_pct}%"},h2{"Construisons la SCI une fois, puis automatisons"},p{"Le parcours de démarrage vérifie les paramètres juridiques, les associés, le premier bien, les premiers locataires et le moteur de règles."}},button{class:"primary",onclick:go_setup,"Continuer la mise en route"}}}
+        section{class:"welcome",div{span{class:"pill","SCI À L’IR"} span{class:"pill muted","TVA sur encaissements"} h2{{data.sci_name}} p{"Le cockpit transforme les événements administratifs en actions anticipées : préparer, contrôler, documenter, puis demander une validation uniquement lorsque nécessaire."}},div{class:"risk-block",div{class:"eyebrow","VIGILANCE"},div{class:"risk {risk_class(&data.risk_level)}",{data.risk_level.clone()}},div{class:"small","Calcul déterministe • traçable"}}}
+        section{class:"metric-row",Metric{label:"Trésorerie",value:euro(data.cash_cents),tone:"positive"} Metric{label:"Créances ouvertes",value:euro(data.receivables_cents),tone:"neutral"} Metric{label:"TVA à préparer",value:euro(data.vat_to_prepare_cents),tone:"warning"} Metric{label:"À traiter < 30 j",value:data.tasks_due_30d.to_string(),tone:"neutral"}}
+        section{class:"module-grid",ModuleCard{title:"Associés",value:counts.associates.to_string(),label:"associés actifs",detail:"Répartition du capital"} ModuleCard{title:"Patrimoine",value:counts.properties.to_string(),label:"biens",detail:format!("{} lots",counts.units)} ModuleCard{title:"Locations",value:counts.leases.to_string(),label:"baux",detail:format!("{} locataires",counts.tenants)} ModuleCard{title:"Facturation",value:counts.invoices.to_string(),label:"factures",detail:format!("{} encaissements",counts.payments)} ModuleCard{title:"Banque",value:counts.bank_transactions.to_string(),label:"mouvements",detail:format!("{} à rapprocher",counts.unmatched_bank)} ModuleCard{title:"Automatisations",value:counts.enabled_automation_rules.to_string(),label:"règles actives",detail:format!("{} règles",counts.automation_rules)}}
+        section{class:"two-col",div{class:"panel",div{class:"panel-head",h3{"Prochaines actions"},span{class:"small","Priorisées automatiquement"}},if data.next_actions.is_empty(){EmptyState{title:"Aucune action générée",text:"Lancez une anticipation pour générer les premières tâches planifiées."}} for task in data.next_actions.iter(){TaskRow{task:task.clone()}}},div{class:"panel",div{class:"panel-head",h3{"Trésorerie prévisionnelle"},span{class:"small","12 mois"}},div{class:"forecast-grid",for point in data.forecast.iter().take(6){div{class:"forecast-card",div{class:"small",{point.date.format("%b %Y").to_string()}},div{class:if point.balance_cents<0{"forecast-value negative"}else{"forecast-value"},{euro(point.balance_cents)}},div{class:"small","solde projeté"}}}} div{class:"forecast-min","Point bas projeté : ",{euro(data.forecast_min_cash_cents)}}}}
+        section{class:"panel",div{class:"panel-head",h3{"Progression de la mise en route"},span{class:"small",{format!("{} / 5 contrôles",[status.profile_ready,status.associates_ready,status.property_ready,status.tenant_ready,status.automation_ready].iter().filter(|v|**v).count())}},div{class:"onboarding-progress",div{class:"progress-track",div{class:"progress-fill",style:format!("width:{}%",status.completion_pct)}}},div{class:"check-grid",Check{ok:status.profile_ready,title:"SCI",text:"Identité, siège, régime et TVA"} Check{ok:status.associates_ready,title:"Associés",text:"Capital et comptes courants"} Check{ok:status.property_ready,title:"Patrimoine",text:"Bien + premier lot"} Check{ok:status.tenant_ready,title:"Locataire",text:"Premier tiers exploitable"} Check{ok:status.automation_ready,title:"Moteur",text:"Règles actives prêtes"}}}}
     }
 }
 
-#[component]
-fn DashboardContent(data: DashboardSnapshot, counts: ModuleCounts, on_setup: EventHandler<MouseEvent>) -> Element {
-    let needs_setup = data.sci_name.trim() == "SCI À CONFIGURER" || data.registered_office.trim().is_empty() || data.registered_office == "À configurer";
-    rsx! {
-        {if needs_setup { rsx! {
-            section { class: "setup-banner",
-                div { div { class: "eyebrow", "MISE EN ROUTE" }, h2 { "Votre SCI n’est pas encore configurée" }, p { "Renseignez les informations juridiques et bancaires une seule fois. Le moteur pourra ensuite préparer ses tâches sans ressaisie." } }
-                button { class: "primary", onclick: on_setup, "Configurer maintenant" }
-            }
-        }} else { rsx! {} }}
-        section { class: "welcome",
-            div { span { class: "pill", "SCI À L’IR" }, span { class: "pill muted", "TVA sur encaissements" }, h2 { {data.sci_name} }, p { "Le cockpit centralise l’activité, détecte les échéances, prépare les travaux récurrents et expose ce qui nécessite réellement une intervention." } }
-            div { class: "risk-block", div { class: "eyebrow", "VIGILANCE" }, div { class: "risk {risk_class(&data.risk_level)}", {data.risk_level.clone()} }, div { class: "small", "Calcul déterministe • traçable" } }
-        }
-        section { class: "metric-row",
-            Metric { label: "Trésorerie", value: euro(data.cash_cents), tone: "positive" }
-            Metric { label: "Créances ouvertes", value: euro(data.receivables_cents), tone: "neutral" }
-            Metric { label: "TVA à préparer", value: euro(data.vat_to_prepare_cents), tone: "warning" }
-            Metric { label: "À traiter < 30 j", value: data.tasks_due_30d.to_string(), tone: "neutral" }
-        }
-        section { class: "module-grid",
-            ModuleCard { title: "Patrimoine", value: counts.properties.to_string(), label: "biens", detail: format!("{} lots actifs", counts.units) }
-            ModuleCard { title: "Locations", value: counts.leases.to_string(), label: "baux", detail: format!("{} locataires", counts.tenants) }
-            ModuleCard { title: "Facturation", value: counts.invoices.to_string(), label: "factures", detail: format!("{} encaissements", counts.payments) }
-            ModuleCard { title: "Banque", value: counts.bank_transactions.to_string(), label: "mouvements", detail: format!("{} à rapprocher", counts.unmatched_bank) }
-            ModuleCard { title: "Documents", value: counts.documents.to_string(), label: "pièces", detail: "archivage centralisé" }
-            ModuleCard { title: "Automatisations", value: counts.enabled_automation_rules.to_string(), label: "règles actives", detail: format!("{} règles configurées", counts.automation_rules) }
-        }
-        section { class: "two-col",
-            div { class: "panel", div { class: "panel-head", h3 { "Prochaines actions" }, span { class: "small", "Priorisées automatiquement" } },
-                if data.next_actions.is_empty() { EmptyState { title: "Aucune action générée", text: "Lancez une anticipation après avoir configuré la SCI." } }
-                for task in data.next_actions.iter() { TaskRow { task: task.clone() } }
-            }
-            div { class: "panel", div { class: "panel-head", h3 { "Trésorerie prévisionnelle" }, span { class: "small", "12 mois" } },
-                div { class: "forecast-grid", for point in data.forecast.iter().take(6) { div { class: "forecast-card", div { class: "small", {point.date.format("%b %Y").to_string()} }, div { class: if point.balance_cents < 0 { "forecast-value negative" } else { "forecast-value" }, {euro(point.balance_cents)} }, div { class: "small", "solde projeté" } } } }
-                div { class: "forecast-min", "Point bas projeté : ", {euro(data.forecast_min_cash_cents)} }
-            }
-        }
-    }
+#[component]fn SetupPage()->Element{
+    let profile=use_resource(||async move{get_sci_profile().await.ok()}); let associates=use_resource(||async move{list_associates().await.ok()}); let properties=use_resource(||async move{list_properties().await.ok()}); let tenants=use_resource(||async move{list_tenants().await.ok()});
+    let mut name=use_signal(String::new); let mut siren=use_signal(String::new); let mut siret=use_signal(String::new); let mut office=use_signal(String::new); let mut iban=use_signal(String::new); let mut bic=use_signal(String::new); let mut initialized=use_signal(||false); let mut saved=use_signal(||false); let mut associate_name=use_signal(String::new); let mut ownership=use_signal(||String::from("100")); let mut property_name=use_signal(String::new); let mut property_address=use_signal(String::new); let mut unit_code=use_signal(String::new); let mut unit_label=use_signal(String::new); let mut unit_rent=use_signal(||String::from("0")); let mut unit_vat=use_signal(||String::from("20")); let mut tenant_name=use_signal(String::new); let mut tenant_siret=use_signal(String::new); let mut tenant_email=use_signal(String::new);
+    if !initialized(){if let Some(Some(p))=&*profile.read(){name.set(p.legal_name.clone());siren.set(p.siren.clone());siret.set(p.siret.clone());office.set(p.registered_office.clone());iban.set(p.iban.clone());bic.set(p.bic.clone());initialized.set(true);}}
+    rsx!{section{class:"page-intro",div{div{class:"eyebrow","ONBOARDING GUIDÉ"},h2{"Configuration initiale de la SCI"},p{"On ne saisit ici que les informations structurantes. Elles alimenteront les documents, les contrôles, les factures, la TVA et toutes les tâches anticipées."}},div{class:"pill","SCI IR • TVA COLLECTION"}}
+        section{class:"setup-layout",div{class:"panel",div{class:"panel-head",h3{"1. Identité & fiscalité"},span{class:"small","indispensable"}},div{class:"form-grid",FormField{label:"Dénomination sociale",value:name(),oninput:move|e:FormEvent|name.set(e.value())} FormField{label:"SIREN",value:siren(),oninput:move|e:FormEvent|siren.set(e.value())} FormField{label:"SIRET",value:siret(),oninput:move|e:FormEvent|siret.set(e.value())} FormField{label:"Siège social",value:office(),oninput:move|e:FormEvent|office.set(e.value())} FormField{label:"IBAN",value:iban(),oninput:move|e:FormEvent|iban.set(e.value())} FormField{label:"BIC",value:bic(),oninput:move|e:FormEvent|bic.set(e.value())}},div{class:"action-row",button{class:"primary",onclick:move |_|async move{let p=SciProfile{legal_name:name(),siren:siren(),siret:siret(),registered_office:office(),tax_regime:"IR".into(),vat_status:"OPTION_LOYERS".into(),vat_basis:"COLLECTION".into(),iban:iban(),bic:bic()};saved.set(update_sci_profile(p).await.is_ok());},"Enregistrer"},if saved(){span{class:"save-ok","Paramètres enregistrés"}}}}
+        div{class:"panel",div{class:"panel-head",h3{"2. Associés"},span{class:"small",{format!("{} actifs",associates.read().as_ref().and_then(|x|x.as_ref()).map(|v|v.len()).unwrap_or(0))}},div{class:"form-grid",FormField{label:"Nom de l’associé",value:associate_name(),oninput:move|e:FormEvent|associate_name.set(e.value())} FormField{label:"Quote-part %",value:ownership(),oninput:move|e:FormEvent|ownership.set(e.value())}},div{class:"action-row",button{class:"secondary",onclick:move |_|async move{if let Ok(pct)=ownership().replace(",", ".").parse::<Decimal>(){let _=create_associate(associate_name(),pct).await;}},"Ajouter l’associé"}} for item in associates.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){AssociateRow{item:item.clone()}}}
+        div{class:"panel",div{class:"panel-head",h3{"3. Premier patrimoine"},span{class:"small","Bien immobilier"}},div{class:"form-grid",FormField{label:"Nom du bien",value:property_name(),oninput:move|e:FormEvent|property_name.set(e.value())} FormField{label:"Adresse",value:property_address(),oninput:move|e:FormEvent|property_address.set(e.value())}},div{class:"action-row",button{class:"secondary",onclick:move |_|async move{let _=create_property(property_name(),property_address(),None,None).await;},"Créer le bien"}} for item in properties.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){PropertyRow{item:item.clone()}} for item in properties.read().as_ref().and_then(|x|x.as_ref()).and_then(|v|v.first()).cloned().into_iter(){div{class:"subform",div{class:"eyebrow","PREMIER LOT"},div{class:"form-grid",FormField{label:"Code du lot",value:unit_code(),oninput:move|e:FormEvent|unit_code.set(e.value())} FormField{label:"Libellé",value:unit_label(),oninput:move|e:FormEvent|unit_label.set(e.value())} FormField{label:"Loyer mensuel €",value:unit_rent(),oninput:move|e:FormEvent|unit_rent.set(e.value())} FormField{label:"TVA %",value:unit_vat(),oninput:move|e:FormEvent|unit_vat.set(e.value())}},div{class:"action-row",button{class:"secondary",onclick:move |_|async move{let rent=unit_rent().replace(",",".").parse::<f64>().unwrap_or(0.0);let vat=unit_vat().replace(",",".").parse::<f64>().unwrap_or(20.0);let _=create_unit(item.id,unit_code(),unit_label(),"COMMERCIAL".into(),(rent*100.0) as i64,(vat*100.0) as i32).await;},"Créer le lot"}}}}}
+        div{class:"panel",div{class:"panel-head",h3{"4. Premier locataire"},span{class:"small","Tiers exploitable"}},div{class:"form-grid",FormField{label:"Nom / raison sociale",value:tenant_name(),oninput:move|e:FormEvent|tenant_name.set(e.value())} FormField{label:"SIRET",value:tenant_siret(),oninput:move|e:FormEvent|tenant_siret.set(e.value())} FormField{label:"E-mail",value:tenant_email(),oninput:move|e:FormEvent|tenant_email.set(e.value())}},div{class:"action-row",button{class:"secondary",onclick:move |_|async move{let _=create_tenant(tenant_name(),tenant_siret(),tenant_email()).await;},"Créer le locataire"}} for item in tenants.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){TenantRow{item:item.clone()}}}
+    }}}
 }
 
-#[component]
-fn SetupPage() -> Element {
-    let profile = use_resource(|| async move { get_sci_profile().await.ok() });
-    let mut name = use_signal(String::new);
-    let mut siren = use_signal(String::new);
-    let mut siret = use_signal(String::new);
-    let mut office = use_signal(String::new);
-    let mut iban = use_signal(String::new);
-    let mut bic = use_signal(String::new);
-    let mut saved = use_signal(|| false);
-    let mut initialized = use_signal(|| false);
+#[component]fn AssociatesPage()->Element{let items=use_resource(||async move{list_associates().await.ok()});rsx!{section{class:"page-intro",div{div{class:"eyebrow","CAPITAL & ASSOCIÉS"},h2{"Associés"},p{"Cette vue deviendra le centre de pilotage des comptes courants, de la répartition du capital et des événements qui doivent être remontés aux associés."}}} section{class:"panel",for item in items.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){AssociateRow{item:item.clone()}}}}}
+#[component]fn PatrimonyPage()->Element{let items=use_resource(||async move{list_properties().await.ok()});rsx!{section{class:"page-intro",div{div{class:"eyebrow","PATRIMOINE IMMOBILIER"},h2{"Patrimoine"},p{"Les biens et leurs lots deviennent la source unique pour les baux, les factures, les révisions, les documents et la prévision de trésorerie."}}} section{class:"panel",for item in items.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){PropertyRow{item:item.clone()}}}}}
+#[component]fn RentalsPage()->Element{let items=use_resource(||async move{list_tenants().await.ok()});rsx!{section{class:"page-intro",div{div{class:"eyebrow","LOCATIONS"},h2{"Locataires & baux"},p{"Les locataires sont préparés ici avant la création des baux. Les prochains automatismes pourront ensuite calculer les révisions et préparer la facturation récurrente."}}} section{class:"panel",for item in items.read().as_ref().and_then(|x|x.as_ref()).cloned().unwrap_or_default().iter(){TenantRow{item:item.clone()}}}}}
 
-    if !initialized() {
-        if let Some(Some(p)) = &*profile.read() {
-            name.set(p.legal_name.clone()); siren.set(p.siren.clone()); siret.set(p.siret.clone()); office.set(p.registered_office.clone()); iban.set(p.iban.clone()); bic.set(p.bic.clone()); initialized.set(true);
-        }
-    }
+#[component]fn ModulePage(title:&'static str,kicker:&'static str,detail:&'static str)->Element{let counts=use_resource(||async move{module_counts().await.ok()});rsx!{section{class:"page-intro",div{div{class:"eyebrow",{kicker}},h2{{title}},p{{detail}}}} section{class:"hero-module",div{class:"hero-module-number","—"},div{class:"hero-module-copy",h3{"Flux opérationnel"},p{"La base est prête. La prochaine étape branche les opérations de ce domaine sur les objets déjà configurés."}}} if counts.read().as_ref().and_then(|x|x.as_ref()).is_some(){section{class:"panel",h3{"Ce qui est déjà raccordé"},p{class:"small","PostgreSQL local • audit • anticipation • données structurées"}}}}}
 
-    rsx! {
-        section { class: "page-intro", div { div { class: "eyebrow", "PARAMÈTRES MAÎTRES" }, h2 { "Configuration de la SCI" }, p { "Ces informations alimentent les documents, les contrôles et les tâches d’anticipation. Le régime fiscal de cette base est fixé à l’IR et la TVA au décaissement n’est pas utilisée : la logique est centrée sur les encaissements." } } }
-        section { class: "form-grid",
-            FormField { label: "Dénomination sociale", value: name(), oninput: move |e: FormEvent| name.set(e.value()) }
-            FormField { label: "SIREN", value: siren(), oninput: move |e: FormEvent| siren.set(e.value()) }
-            FormField { label: "SIRET", value: siret(), oninput: move |e: FormEvent| siret.set(e.value()) }
-            FormField { label: "Siège social", value: office(), oninput: move |e: FormEvent| office.set(e.value()) }
-            FormField { label: "IBAN", value: iban(), oninput: move |e: FormEvent| iban.set(e.value()) }
-            FormField { label: "BIC", value: bic(), oninput: move |e: FormEvent| bic.set(e.value()) }
-        }
-        section { class: "facts-row",
-            InfoTile { label: "Régime", value: "SCI à l’IR" }
-            InfoTile { label: "TVA", value: "Sur encaissements" }
-            InfoTile { label: "Automatisation", value: "Préparation + validation" }
-            InfoTile { label: "Traçabilité", value: "Journal d’audit" }
-        }
-        div { class: "action-row", button { class: "primary", onclick: move |_| async move {
-            let p = SciProfile { legal_name:name(), siren:siren(), siret:siret(), registered_office:office(), tax_regime:"IR".into(), vat_status:"OPTION_LOYERS".into(), vat_basis:"COLLECTION".into(), iban:iban(), bic:bic() };
-            saved.set(update_sci_profile(p).await.is_ok());
-        }, "Enregistrer la configuration" }, if saved() { span { class: "save-ok", "Configuration enregistrée" } } }
-    }
-}
+#[component]fn AutomationPage()->Element{let mut result=use_signal(||None::<crate::server::AutomationRunResult>);let counts=use_resource(||async move{module_counts().await.ok()});rsx!{section{class:"page-intro",div{div{class:"eyebrow","MOTEUR DE RÈGLES"},h2{"Automatisations"},p{"Le moteur prépare les prochaines actions à partir des données réelles. Il reste idempotent et écrit une trace d’audit à chaque cycle."}} button{class:"primary",onclick:move |_|async move{result.set(run_anticipation_cycle().await.ok());},"Exécuter maintenant"}} section{class:"automation-grid",AutomationTile{name:"Préparer les loyers",code:"RENT_INVOICE",days:"45 j"} AutomationTile{name:"Rapprocher les encaissements",code:"PAYMENT_RECONCILIATION",days:"30 j"} AutomationTile{name:"Préparer la TVA",code:"VAT_COLLECTION",days:"90 j"} AutomationTile{name:"Préparer la clôture",code:"ANNUAL_CLOSE",days:"180 j"} AutomationTile{name:"Anticiper les baux",code:"LEASE_REVIEW",days:"180 j"} AutomationTile{name:"Surveiller les assurances",code:"INSURANCE_EXPIRY",days:"180 j"}} if let Some(r)=result(){section{class:"run-result",h3{"Dernier cycle"},p{{format!("{} règles évaluées • {} tâches créées • {}",r.evaluated_rules,r.created_tasks,r.ran_at.format("%d/%m/%Y %H:%M"))}}}} section{class:"panel",div{class:"panel-head",h3{"État du moteur"},span{class:"small",{format!("{} règles actives",counts.read().as_ref().and_then(|x|x.as_ref()).map(|c|c.enabled_automation_rules).unwrap_or(0))}}},p{class:"small","Idempotence activée • audit SYSTEM • préparation avant échéance"}}}}
 
-#[component]
-fn ModulePage(title: &'static str, kicker: &'static str, focus: &'static str) -> Element {
-    let counts = use_resource(|| async move { module_counts().await.ok() });
-    let snapshot = counts.read();
-    let value = snapshot.as_ref().and_then(|x| x.as_ref()).map(|c| match focus { "properties"=>c.properties, "leases"=>c.leases, "invoices"=>c.invoices, "bank"=>c.bank_transactions, "vat"=>c.payments, _=>0 });
-    rsx! { section { class: "page-intro", div { div { class: "eyebrow", {kicker} }, h2 { {title} }, p { "Ce module est prêt à recevoir les opérations de la SCI. Les indicateurs sont déjà branchés sur la base locale ; les prochaines actions seront ajoutées ici sans modifier le cœur métier." } } }
-        section { class: "hero-module", div { class: "hero-module-number", {value.unwrap_or(0).to_string()} }, div { class: "hero-module-copy", h3 { "Éléments enregistrés" }, p { "Le nombre ci-dessus provient directement de PostgreSQL." } }, button { class: "secondary", "Ajouter" } }
-        section { class: "empty-workspace", h3 { "Espace opérationnel" }, p { "Aucune donnée métier n’est encore saisie dans cette base neuve. C’est volontaire : on construit votre SCI depuis une configuration propre, puis les automatismes se déclencheront à partir de vos données réelles." }, div { class: "workspace-steps", Step { n:"01", t:"Configurer" }, Step { n:"02", t:"Importer / saisir" }, Step { n:"03", t:"Contrôler" }, Step { n:"04", t:"Automatiser" } } }
-    }
-}
+#[component]fn AssociateRow(item:AssociateItem)->Element{rsx!{div{class:"data-row",div{div{class:"data-title",{item.display_name}},div{class:"small",{format!("Compte courant : {}",euro(item.current_account_cents))}}},div{class:"row-value",{format!("{} %",item.ownership_pct)}}}}}
+#[component]fn PropertyRow(item:PropertyItem)->Element{rsx!{div{class:"data-row",div{div{class:"data-title",{item.name}},div{class:"small",{item.address}}},div{class:"row-value",{format!("{} lots",item.units_count)}}}}}
+#[component]fn TenantRow(item:TenantItem)->Element{rsx!{div{class:"data-row",div{div{class:"data-title",{item.legal_name}},div{class:"small",{item.contact_email}}},div{class:"row-value",if item.active{"Actif"}else{"Inactif"}}}}}
+#[component]fn Check(ok:bool,title:&'static str,text:&'static str)->Element{rsx!{div{class:if ok{"check ok"}else{"check"},span{class:"check-icon",if ok{"✓"}else{"·"}},div{strong{{title}},div{class:"small",{text}}}}}}
+#[component]fn TaskRow(task:TaskItem)->Element{rsx!{div{class:"task-row",div{class:"task-main",div{class:"task-title",{task.title}},div{class:"small","Échéance : ",{task.due_at.format("%d/%m/%Y %H:%M").to_string()}}},div{class:state_class(&task.state),{state_label(&task.state)}}}}}
+#[component]fn AutomationTile(name:&'static str,code:&'static str,days:&'static str)->Element{rsx!{div{class:"automation-tile",div{class:"code",{code}},h3{{name}},div{class:"small","Horizon ",{days}},div{class:"dotline",span{},"Préparation automatique"}}}}
+#[component]fn Metric(label:&'static str,value:String,tone:&'static str)->Element{rsx!{div{class:"metric-card {tone}",div{class:"metric-label",{label}},div{class:"metric-value",{value}}}}}
+#[component]fn ModuleCard(title:&'static str,value:String,label:&'static str,detail:String)->Element{rsx!{div{class:"module-card",div{class:"eyebrow",{title}},div{class:"module-number",{value}},div{class:"small",{label}},p{{detail}}}}}
+#[component]fn EmptyState(title:&'static str,text:&'static str)->Element{rsx!{div{class:"empty-state",h3{{title}},p{{text}}}}}
+#[component]fn FormField(label:&'static str,value:String,oninput:EventHandler<FormEvent>)->Element{rsx!{label{class:"field",span{{label}},input{value:value,oninput:oninput}}}}
 
-#[component]
-fn CalendarPage() -> Element {
-    let counts = use_resource(|| async move { module_counts().await.ok() });
-    rsx! { section { class: "page-intro", div { div { class: "eyebrow", "ANTICIPATION FISCALE" }, h2 { "Calendrier fiscal" }, p { "Les échéances fiscales seront centralisées ici avec leur source, leur période, leur statut et les tâches préparatoires associées." } } }
-        section { class: "hero-module", div { class: "hero-module-number", {counts.read().as_ref().and_then(|x| x.as_ref()).map(|c| c.tax_deadlines).unwrap_or(0).to_string()} }, div { class: "hero-module-copy", h3 { "Échéances à venir" }, p { "Aucune échéance n’est encore personnalisée dans cette base neuve." } }, button { class: "secondary", "Ajouter une échéance" } }
-    }
-}
-
-#[component]
-fn AutomationPage() -> Element {
-    let mut result = use_signal(|| None::<crate::server::AutomationRunResult>);
-    let counts = use_resource(|| async move { module_counts().await.ok() });
-    rsx! { section { class: "page-intro", div { div { class: "eyebrow", "MOTEUR DE RÈGLES" }, h2 { "Automatisations" }, p { "Chaque règle a une échéance, une priorité, un horizon et une trace d’audit. L’application prépare ; le gérant conserve la validation finale quand elle est nécessaire." } } button { class: "primary", onclick: move |_| async move { result.set(run_anticipation_cycle().await.ok()); }, "Exécuter maintenant" } }
-        section { class: "automation-grid", AutomationTile { name:"Préparer les loyers", code:"RENT_INVOICE", days:"45 j" }, AutomationTile { name:"Rapprocher les encaissements", code:"PAYMENT_RECONCILIATION", days:"30 j" }, AutomationTile { name:"Préparer la TVA", code:"VAT_COLLECTION", days:"90 j" }, AutomationTile { name:"Préparer la clôture", code:"ANNUAL_CLOSE", days:"180 j" }, AutomationTile { name:"Anticiper les baux", code:"LEASE_REVIEW", days:"180 j" }, AutomationTile { name:"Surveiller les assurances", code:"INSURANCE_EXPIRY", days:"180 j" } }
-        if let Some(r) = result() { section { class: "run-result", h3 { "Dernier cycle" }, p { {format!("{} règles évaluées • {} tâches créées • {}", r.evaluated_rules, r.created_tasks, r.ran_at.format("%d/%m/%Y %H:%M"))} } } }
-        section { class: "panel", div { class: "panel-head", h3 { "État du moteur" }, span { class: "small", {format!("{} règles actives", counts.read().as_ref().and_then(|x| x.as_ref()).map(|c| c.enabled_automation_rules).unwrap_or(0))} } }, p { class: "small", "Le cycle automatique tourne côté serveur et reste idempotent : une même occurrence ne recrée pas une tâche existante." } }
-    }
-}
-
-#[component] fn AutomationTile(name: &'static str, code: &'static str, days: &'static str) -> Element { rsx! { div { class: "automation-tile", div { class: "code", {code} }, h3 { {name} }, div { class: "small", "Horizon ", {days} }, div { class: "dotline", span {}, "Préparation automatique" } } } }
-#[component] fn Metric(label: &'static str, value: String, tone: &'static str) -> Element { rsx! { div { class: "metric-card {tone}", div { class: "metric-label", {label} }, div { class: "metric-value", {value} } } } }
-#[component] fn ModuleCard(title: &'static str, value: String, label: &'static str, detail: String) -> Element { rsx! { div { class: "module-card", div { class: "eyebrow", {title} }, div { class: "module-number", {value} }, div { class: "small", {label} }, p { {detail} } } } }
-#[component] fn TaskRow(task: TaskItem) -> Element { rsx! { div { class: "task-row", div { class: "task-main", div { class: "task-title", {task.title} }, div { class: "small", "Échéance : ", {task.due_at.format("%d/%m/%Y %H:%M").to_string()} } }, div { class: state_class(&task.state), {state_label(&task.state)} } } } }
-#[component] fn EmptyState(title: &'static str, text: &'static str) -> Element { rsx! { div { class: "empty-state", h3 { {title} }, p { {text} } } } }
-#[component] fn FormField(label: &'static str, value: String, oninput: EventHandler<FormEvent>) -> Element { rsx! { label { class: "field", span { {label} }, input { value: value, oninput: oninput } } } }
-#[component] fn InfoTile(label: &'static str, value: &'static str) -> Element { rsx! { div { class: "info-tile", div { class: "small", {label} }, strong { {value} } } } }
-#[component] fn Step(n: &'static str, t: &'static str) -> Element { rsx! { div { class: "step", span { {n} }, strong { {t} } } } }
-
-fn euro(cents: i64) -> String { let sign = if cents < 0 { "−" } else { "" }; let abs = cents.abs(); format!("{sign}{}, {:02} €", abs / 100, abs % 100).replace(", ", ",") }
-fn risk_class(risk: &str) -> &'static str { match risk { "CRITICAL"=>"risk-critical", "WATCH"=>"risk-watch", _=>"risk-normal" } }
-fn state_class(state: &TaskState) -> &'static str { match state { TaskState::Blocked=>"status danger", TaskState::Ready=>"status ready", TaskState::Running=>"status running", _=>"status planned" } }
-fn state_label(state: &TaskState) -> &'static str { match state { TaskState::Blocked=>"Bloquée", TaskState::Ready=>"Prête", TaskState::Running=>"En cours", TaskState::Planned=>"Planifiée", TaskState::Done=>"Terminée", TaskState::Skipped=>"Ignorée" } }
+fn euro(cents:i64)->String{let sign=if cents<0{"−"}else{""};let abs=cents.abs();format!("{sign}{}.{:02} €",abs/100,abs%100)}
+fn risk_class(risk:&str)->&'static str{match risk{"CRITICAL"=>"risk-critical","WATCH"=>"risk-watch",_=>"risk-normal"}}
+fn state_class(state:&TaskState)->&'static str{match state{TaskState::Blocked=>"status danger",TaskState::Ready=>"status ready",TaskState::Running=>"status running",_=>"status planned"}}
+fn state_label(state:&TaskState)->&'static str{match state{TaskState::Blocked=>"Bloquée",TaskState::Ready=>"Prête",TaskState::Running=>"En cours",TaskState::Planned=>"Planifiée",TaskState::Done=>"Terminée",TaskState::Skipped=>"Ignorée"}}

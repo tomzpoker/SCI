@@ -1,43 +1,32 @@
-# SCI Family Pilot 0.1.0
+# SCI Family Pilot 0.3.1
 
-Application neuve en Rust pour piloter une SCI familiale à l'IR avec TVA sur encaissements.
+Base neuve, full Rust, destinée au pilotage administratif d'une SCI familiale à l'IR avec TVA gérée sur encaissements.
 
-## Ce qui existe dans cette version
+## Ce que cette version ajoute
 
-- cockpit de pilotage ;
-- configuration de la SCI ;
-- indicateurs connectés à PostgreSQL ;
-- espaces Patrimoine, Locations, Facturation, Banque, TVA, Calendrier fiscal ;
-- moteur d'anticipation idempotent ;
-- règles d'automatisation ;
-- journal d'audit ;
-- prévision de trésorerie ;
-- architecture Dioxus Fullstack + PostgreSQL/SQLx.
+- onboarding guidé avec progression 0–100 % ;
+- configuration juridique/fiscale et coordonnées bancaires ;
+- création et lecture des associés ;
+- création et lecture des biens ;
+- création et lecture des locataires ;
+- migration opérationnelle 0002 ;
+- compteurs PostgreSQL réels ;
+- moteur d'anticipation idempotent + audit ;
+- cockpit de trésorerie et vigilance ;
+- architecture prête pour les flux baux → factures → encaissements → TVA.
 
-La base est volontairement neuve : aucune donnée patrimoniale ou locative fictive n'est injectée.
-
-## Prérequis Windows
-
-- Rust stable GNU ;
-- MSYS2 UCRT64 avec GCC/binutils ;
-- Docker Desktop.
-
-Le projet contient `.cargo/config.toml` pour pointer les builds GNU vers `C:\msys64\ucrt64\bin`, ce qui évite de modifier manuellement le PATH pour Cargo.
-
-## Démarrage
+## Démarrage Windows
 
 ```powershell
+$env:Path="C:\msys64\ucrt64\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 docker compose up -d
-.\scripts\start.ps1
+dx serve --web
 ```
 
-Ouvrir `http://127.0.0.1:8080`.
+Serveur local : http://127.0.0.1:8080
 
 ## Base de données
 
-PostgreSQL écoute sur `127.0.0.1:55432`.
-La migration `migrations/0001_foundation.sql` est appliquée automatiquement au premier accès serveur.
+PostgreSQL local dans Docker, migrations appliquées automatiquement par SQLx.
 
-## Philosophie
-
-Les automatisations préparent et signalent. Les opérations sensibles restent soumises à validation du gérant. Chaque cycle automatique laisse une trace dans le journal d'audit.
+La configuration locale (`.env`) reste hors Git.

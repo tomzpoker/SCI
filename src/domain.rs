@@ -56,6 +56,7 @@ pub struct ModuleCounts {
     pub automation_rules: i64,
     pub enabled_automation_rules: i64,
     pub tax_deadlines: i64,
+    pub associates: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,7 +72,47 @@ pub struct SciProfile {
     pub bic: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OnboardingStatus {
+    pub profile_ready: bool,
+    pub associates_ready: bool,
+    pub property_ready: bool,
+    pub tenant_ready: bool,
+    pub automation_ready: bool,
+    pub completed: bool,
+    pub completion_pct: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AssociateItem {
+    pub id: Uuid,
+    pub display_name: String,
+    pub ownership_pct: Decimal,
+    pub current_account_cents: i64,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PropertyItem {
+    pub id: Uuid,
+    pub name: String,
+    pub address: String,
+    pub acquisition_date: Option<NaiveDate>,
+    pub acquisition_cents: Option<i64>,
+    pub units_count: i64,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TenantItem {
+    pub id: Uuid,
+    pub legal_name: String,
+    pub siret: String,
+    pub contact_email: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuleConfig {
     pub lead_days: Option<i64>,
     pub tolerance_cents: Option<i64>,
@@ -79,7 +120,7 @@ pub struct RuleConfig {
     pub check_documents: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VatPolicy {
     pub rate: Decimal,
     pub on_collection: bool,
