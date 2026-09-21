@@ -1,32 +1,29 @@
-# SCI Family Pilot 0.3.1
+# SCI Family Pilot 0.4.0
 
-Base neuve, full Rust, destinée au pilotage administratif d'une SCI familiale à l'IR avec TVA gérée sur encaissements.
+Application full Rust pour le pilotage administratif d’une SCI familiale à l’IR avec TVA sur encaissement.
 
-## Ce que cette version ajoute
+## Fonctionnel couvert
 
-- onboarding guidé avec progression 0–100 % ;
-- configuration juridique/fiscale et coordonnées bancaires ;
-- création et lecture des associés ;
-- création et lecture des biens ;
-- création et lecture des locataires ;
-- migration opérationnelle 0002 ;
-- compteurs PostgreSQL réels ;
-- moteur d'anticipation idempotent + audit ;
-- cockpit de trésorerie et vigilance ;
-- architecture prête pour les flux baux → factures → encaissements → TVA.
+- Configuration SCI, siège, régime et coordonnées bancaires
+- Associés et quote-parts avec contrôle du total à 100 %
+- Patrimoine : biens + lots
+- Locataires
+- Baux et échéances de paiement
+- Factures : brouillon, émission, suivi des paiements
+- Encaissements et calcul TVA par période
+- Banque : saisie, import CSV idempotent, rapprochement
+- Calendrier fiscal et tâches bloquantes
+- Référentiel documentaire et expirations
+- Moteur d’anticipation idempotent
+- Tâches et changements d’état
+- Journal d’audit
+- Prévision de trésorerie 12 mois
 
 ## Démarrage Windows
 
-```powershell
-$env:Path="C:\msys64\ucrt64\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
-docker compose up -d
-dx serve --web
-```
+1. `docker compose up -d`
+2. définir `DATABASE_URL=postgres://sci:sci@127.0.0.1:55432/sci_family`
+3. `cargo check --features server`
+4. `dx serve --web`
 
-Serveur local : http://127.0.0.1:8080
-
-## Base de données
-
-PostgreSQL local dans Docker, migrations appliquées automatiquement par SQLx.
-
-La configuration locale (`.env`) reste hors Git.
+Le projet utilise PostgreSQL et applique les migrations au démarrage du backend.

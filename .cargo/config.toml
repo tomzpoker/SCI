@@ -1,10 +1,6 @@
-[env]
-CC_x86_64-pc-windows-gnu = { value = "C:\\msys64\\ucrt64\\bin\\gcc.exe", force = true }
-AR_x86_64-pc-windows-gnu = { value = "C:\\msys64\\ucrt64\\bin\\ar.exe", force = true }
-CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = { value = "C:\\msys64\\ucrt64\\bin\\gcc.exe", force = true }
-
-[target.x86_64-pc-windows-gnu]
-linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
+ [env]
+CC_x86_64-pc-windows-gnu = { value = 'C:/msys64/mingw64/bin/gcc.exe', force = true }
+AR_x86_64-pc-windows-gnu = { value = 'C:/msys64/mingw64/bin/ar.exe', force = true }
 
 [target.wasm32-unknown-unknown]
-rustflags = ["--cfg=web_sys_unstable_apis"]
+rustflags = ['--cfg=web_sys_unstable_apis']
