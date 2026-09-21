@@ -1,0 +1,10 @@
+[application]
+name = "sci-family-pilot"
+default_platform = "web"
+asset_dir = "assets"
+
+[web.app]
+title = "SCI Family Pilot"
+
+[web.wasm_opt]
+level = "z"

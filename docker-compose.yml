@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sci-family-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sci
+      POSTGRES_PASSWORD: sci
+      POSTGRES_DB: sci_family
+    ports:
+      - "55432:5432"
+    volumes:
+      - sci_family_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sci -d sci_family"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  sci_family_pgdata:
