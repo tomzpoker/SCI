@@ -5,3 +5,4 @@
 /.sci-inbox/
 server_full.txt
 src/ui.rs.mojibake-backup
+tests/integration/modules_12.rs.bak
