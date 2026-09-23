@@ -1,0 +1,23 @@
+# Locked external-engine inventory.
+# Do not use unpinned "latest" engines in production.
+
+[ocr]
+status = "planned"
+version = "TO_VERIFY"
+platform = "windows-x86_64"
+url = "TO_VERIFY"
+sha256 = "TO_VERIFY"
+
+[pdf]
+status = "planned"
+version = "TO_VERIFY"
+platform = "windows-x86_64"
+url = "TO_VERIFY"
+sha256 = "TO_VERIFY"
+
+[llm]
+status = "optional"
+version = "TO_VERIFY"
+platform = "windows-x86_64"
+url = "TO_VERIFY"
+sha256 = "TO_VERIFY"

@@ -21,5 +21,6 @@ pub async fn db() -> Result<&'static PgPool, sqlx::Error> {
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(pool)
-    }).await
+    })
+    .await
 }
