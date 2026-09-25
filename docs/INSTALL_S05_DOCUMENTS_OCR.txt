@@ -1,0 +1,7 @@
+S05 — DOCUMENTS & OCR
+1. Copier le contenu du ZIP dans D:\SCI\DEV.
+2. Depuis D:\SCI\DEV\SCI-family-rust, lancer :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s05-documents-ocr.ps1
+3. Appliquer la migration avec scripts\migrate.ps1.
+4. Pour OCR local, installer/configurer un exécutable OCR puis définir SCI_OCR_COMMAND (ex. tesseract).
+5. Tester cargo test --lib --features server puis cargo check --features server.

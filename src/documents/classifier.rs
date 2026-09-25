@@ -39,6 +39,12 @@ pub fn classify(input: ClassificationInput) -> ClassificationResult {
             0.85,
             vec!["Indices liés au loyer détectés".to_owned()],
         )
+    } else if text.contains("avenant") || text.contains("amendement") {
+        (
+            DocumentType::LeaseAmendment,
+            0.90,
+            vec!["Indice d'avenant contractuel détecté".to_owned()],
+        )
     } else if text.contains("bail") || text.contains("preneur") || text.contains("bailleur") {
         (
             DocumentType::Lease,
@@ -69,6 +75,18 @@ pub fn classify(input: ClassificationInput) -> ClassificationResult {
             0.78,
             vec!["Indices de paiement détectés".to_owned()],
         )
+    } else if text.contains("courrier") || text.contains("madame") || text.contains("monsieur") {
+        (
+            DocumentType::Correspondence,
+            0.72,
+            vec!["Indices de courrier détectés".to_owned()],
+        )
+    } else if text.contains("justificatif") || text.contains("piece justificative") || text.contains("pièce justificative") {
+        (
+            DocumentType::SupportingDocument,
+            0.72,
+            vec!["Indices de justificatif détectés".to_owned()],
+        )
     } else {
         (
             DocumentType::Unknown,
@@ -94,5 +112,17 @@ pub fn to_candidate(
         classification_confidence: result.confidence,
         source: "ocr".to_owned(),
         requires_validation: true,
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn classifies_bank_statement() {
+        let r=classify(ClassificationInput{document_id:uuid::Uuid::nil(),filename:"releve.pdf".into(),text:"RELEVÉ BANCAIRE IBAN FR76".into()});
+        assert_eq!(r.document_type, DocumentType::BankStatement);
+        assert!(r.confidence>0.8);
     }
 }

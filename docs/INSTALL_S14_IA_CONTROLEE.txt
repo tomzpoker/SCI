@@ -1,0 +1,6 @@
+S14 — IA CONTRÔLÉE
+1. Le mode initial est DISABLED.
+2. Exécuter scripts\verify-s14-ai.ps1.
+3. Appliquer les migrations avec scripts\migrate.ps1.
+4. Puis cargo test --lib --features server et cargo check --features server.
+5. SCI_ACTOR_ROLE peut préciser le rôle local; le runtime actuel reste single-user/local.

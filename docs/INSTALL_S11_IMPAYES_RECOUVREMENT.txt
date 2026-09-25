@@ -1,0 +1,7 @@
+S11 — IMPAYES & RECOUVREMENT
+
+Migration: 0021_unpaid_recovery.sql
+Couvre absence, retard, paiement partiel, paiement inférieur (UNDERPAYMENT), récidive, historique, promesses de paiement et actions de recouvrement avec validation humaine obligatoire avant toute mesure juridique.
+
+Validation Windows:
+cd D:\SCI\DEV\SCI-family-rust;powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s11-recovery.ps1

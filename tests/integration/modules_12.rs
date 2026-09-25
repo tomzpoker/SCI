@@ -9,8 +9,8 @@ use sci_family_pilot::server::{
     get_sci_profile, import_bank_csv, issue_invoice, list_associates, list_automation_rules,
     list_bank_transactions, list_deadlines, list_documents, list_invoices, list_leases,
     list_payments, list_tasks, list_tenants, list_units, module_counts, onboarding_status,
-    reconcile_bank_transaction, register_document, run_anticipation_cycle, update_sci_profile,
-    vat_summary,
+    archive_document_record, reconcile_bank_transaction, register_document, run_anticipation_cycle, update_sci_profile,
+    vat_summary, auth_status,
 };
 
 const TEST_PREFIX: &str = "SCI-TEST-AUTO";
@@ -236,6 +236,7 @@ async fn cleanup(pool: &PgPool, sci_id: Uuid) {
 
 #[tokio::test]
 async fn integration_12_modules() {
+    auth_status().await.expect("auth bootstrap");
     let pool = database().await;
     let sci_id = sci_id(&pool).await;
 
@@ -776,6 +777,15 @@ async fn integration_12_modules() {
         "Document de test introuvable"
     );
 
+    let document_id = documents.iter().find(|d| d.title == document_title).unwrap().id;
+    archive_document_record(document_id, "Fin du cycle S19".into())
+        .await
+        .expect("archive_document_record");
+    let archived_status: String = sqlx::query_scalar(
+        "SELECT status FROM documents WHERE id=$1"
+    ).bind(document_id).fetch_one(&pool).await.expect("archived status");
+    assert_eq!(archived_status, "ARCHIVED");
+
     let dashboard = dashboard_snapshot().await.expect("dashboard_snapshot");
 
     assert!(!dashboard.risk_level.is_empty());
@@ -785,6 +795,7 @@ async fn integration_12_modules() {
     let onboarding = onboarding_status().await.expect("onboarding_status");
 
     println!("  DOCUMENT          : OK");
+    println!("  ARCHIVE           : OK");
     println!("  DASHBOARD         : OK");
     println!("  MODULE COUNTS     : OK");
     println!("  ONBOARDING        : OK");
@@ -814,6 +825,7 @@ async fn integration_12_modules() {
     println!("10  TVA / échéances       OK");
     println!("11  Automatisation        OK");
     println!("12  Documents / pilotage  OK");
+    println!("13  Archive              OK");
     println!("==================================================");
 
     cleanup(&pool, sci_id).await;

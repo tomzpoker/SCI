@@ -9,7 +9,7 @@ use tokio::sync::OnceCell;
 static DB: OnceCell<PgPool> = OnceCell::const_new();
 
 #[cfg(feature = "server")]
-pub async fn db() -> Result<&'static PgPool, sqlx::Error> {
+pub async fn db_unchecked() -> Result<&'static PgPool, sqlx::Error> {
     DB.get_or_try_init(|| async {
         dotenvy::dotenv().ok();
         let url = std::env::var("DATABASE_URL")
@@ -23,4 +23,11 @@ pub async fn db() -> Result<&'static PgPool, sqlx::Error> {
         Ok(pool)
     })
     .await
+}
+
+#[cfg(feature="server")]
+pub async fn db() -> Result<&'static PgPool, sqlx::Error> {
+    let pool = db_unchecked().await?;
+    crate::security::assert_authenticated(pool).await?;
+    Ok(pool)
 }

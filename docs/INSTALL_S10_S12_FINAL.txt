@@ -1,0 +1,21 @@
+SCI FAMILY RUST — INSTALLATION S10 → S12
+
+Projet canonique : D:\SCI\DEV\SCI-family-rust
+Dernière migration : 0022_document_generation.sql
+
+1) Démarrer PostgreSQL
+cd D:\SCI\DEV\SCI-family-rust;docker compose up -d
+
+2) Appliquer les migrations
+cd D:\SCI\DEV\SCI-family-rust;powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+
+3) Contrôle statique S10→S12
+cd D:\SCI\DEV\SCI-family-rust;powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s10-s12-final.ps1
+
+4) Tests Rust sur PC Windows
+cd D:\SCI\DEV\SCI-family-rust;cargo test --lib --features server;cargo check --features server
+
+5) Lancer l'application web
+cd D:\SCI\DEV\SCI-family-rust;dx serve --web
+
+Important : l'environnement de fabrication de la livraison ne dispose pas de cargo/rustc/psql. La livraison est donc READY FOR REVIEW et la compilation/migration réelle doit être certifiée sur le PC Windows cible.

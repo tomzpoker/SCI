@@ -13,7 +13,7 @@ $ignore = Get-Content $gitignore -Raw -ErrorAction SilentlyContinue
 foreach($entry in @('.env','.env.*','target/')) { if($ignore -notmatch [regex]::Escape($entry)){Add-Content $gitignore $entry} }
 git rm --cached --ignore-unmatch .env 2>$null | Out-Null
 git add .
-if (git status --porcelain) { git commit -m "SCI Family Pilot 0.4.0" | Out-Host }
+if (git status --porcelain) { git commit -m "SCI Family Pilot 0.5.0" | Out-Host }
 if (-not (gh repo view $Repo 2>$null)) {
   gh repo create $Repo --private --source . --remote origin --push
 } else {

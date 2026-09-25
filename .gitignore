@@ -6,3 +6,16 @@
 server_full.txt
 src/ui.rs.mojibake-backup
 tests/integration/modules_12.rs.bak
+
+# Runtime/local data — never commit
+.env.local
+.env.production
+.env.*.local
+!.env.example
+snapshots/
+*.dump
+*.sqlite
+*.sqlite3
+data/real/
+documents_real/
+exports/

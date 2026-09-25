@@ -1,0 +1,11 @@
+S16 AUDIT / SECURITE / RECOVERY
+
+1. Extraire le ZIP complet.
+2. Configurer SCI_BOOTSTRAP_USERNAME et SCI_BOOTSTRAP_PASSWORD dans .env.
+3. Démarrer PostgreSQL.
+4. Le compte initial OWNER est créé au premier démarrage si aucun compte n’existe.
+5. Changer le mot de passe initial avant usage réel.
+6. Doctor : .\scripts\doctor.ps1
+7. Recovery : .\scripts\recovery.ps1 -Action Doctor
+
+Restore/Rollback exigent une intention explicite et sont à tester sur une copie avant production.

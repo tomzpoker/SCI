@@ -1,0 +1,23 @@
+SCI FAMILY RUST — INSTALLATION S08
+
+Chemin projet
+D:\SCI\DEV\SCI-family-rust
+
+1. Se placer dans le projet
+cd D:\SCI\DEV\SCI-family-rust
+
+2. Lancer PostgreSQL si nécessaire
+docker compose up -d postgres
+
+3. Appliquer les migrations SQLx
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+
+4. Contrôle S08
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s08-banking.ps1
+
+5. Vérification Rust
+cargo test --lib --features server
+cargo check --features server
+
+PDF/OCR
+Définir SCI_OCR_COMMAND avec un exécutable OCR local compatible avec : <commande> <fichier.pdf> stdout.

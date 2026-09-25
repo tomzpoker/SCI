@@ -1,0 +1,5 @@
+S13 — E-FACTURATION
+1. Vérifier PostgreSQL 17 et le dossier du projet.
+2. Exécuter scripts\verify-s13-einvoicing.ps1.
+3. Appliquer les migrations avec scripts\migrate.ps1.
+4. Puis cargo test --lib --features server et cargo check --features server.

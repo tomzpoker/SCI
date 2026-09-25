@@ -1,0 +1,5 @@
+SCI Family Rust — S18 RELEASE
+
+1. Vérifier le dépôt : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-git-hygiene.ps1
+2. Générer le rapport : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Version 0.5.0
+3. Synchroniser Git : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\git-sync.ps1 -Action release -Branch main -Message 'Release 0.5.0'

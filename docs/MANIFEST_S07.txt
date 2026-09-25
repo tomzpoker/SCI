@@ -1,0 +1,32 @@
+SCI Family Rust — Manifest S07 Facturation
+
+Principaux fichiers créés/modifiés pour S07 :
+
+D:\SCI\DEV\SCI-family-rust\migrations\0017_billing_invoicing.sql
+D:\SCI\DEV\SCI-family-rust\src\billing.rs
+D:\SCI\DEV\SCI-family-rust\src\server.rs
+D:\SCI\DEV\SCI-family-rust\src\ui.rs
+D:\SCI\DEV\SCI-family-rust\src\lib.rs
+D:\SCI\DEV\SCI-family-rust\scripts\verify-s07-billing.ps1
+D:\SCI\DEV\SCI-family-rust\INSTALL_S07_FACTURATION.txt
+D:\SCI\DEV\SCI-family-rust\S07.md
+D:\SCI\DEV\SCI-family-rust\S07_FINAL.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0701.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0702.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0703.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0704.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0705.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0706.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0707.md
+D:\SCI\DEV\SCI-family-rust\S07_US-0707_EFACTURATION.md
+D:\SCI\DEV\SCI-family-rust\versions\S07.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0701.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0702.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0703.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0704.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0705.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0706.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0707.md
+D:\SCI\DEV\SCI-family-rust\versions\S07_US-0707_EFACTURATION.md
+
+Le reste du projet est conservé depuis les livraisons S01 à S06.

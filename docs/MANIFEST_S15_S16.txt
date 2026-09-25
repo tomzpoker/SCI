@@ -1,0 +1,4 @@
+SCI FAMILY RUST — MANIFEST S15/S16
+Migrations: 0027_ux_zero_saisie.sql, 0028_security_recovery.sql
+Sources: ux.rs, security.rs, infrastructure.rs, entity_scope.rs, assistant/control.rs, assistant/tools.rs, ui.rs, lib.rs, main.rs
+Scripts: doctor.ps1, recovery.ps1, sci.ps1, verify-s15-s16-final.ps1

@@ -1,0 +1,8 @@
+{
+  "id": "QUOTE-TRANSITION-2026",
+  "rule_version": "SHARE-HISTORY-2026.1",
+  "date": "2026-09-25",
+  "inputs": {"period_start": "2026-01-01", "period_end": "2026-12-31", "transfers": [{"date":"2026-07-01","from":"A","to":"B","percentage":25}]},
+  "expected_output": {"A": 50, "B": 50},
+  "source": {"name": "Historique des parts SCI", "reference": "FIXTURE-S10-003"}
+}

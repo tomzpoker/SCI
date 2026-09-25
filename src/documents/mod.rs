@@ -2,18 +2,23 @@ pub mod classifier;
 pub mod email;
 pub mod extractor;
 pub mod ocr;
+pub(crate) mod workflow;
+pub use workflow::DocumentsWorkflowPage;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DocumentType {
     InvoiceSupplier,
     RentInvoice,
     BankStatement,
     PaymentProof,
     Lease,
+    LeaseAmendment,
     TaxDocument,
     Insurance,
     Administrative,
+    Correspondence,
+    SupportingDocument,
     Unknown,
 }
 

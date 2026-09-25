@@ -1,0 +1,6 @@
+{
+  "name": "cycle_locatif_complet",
+  "steps": [
+    "SCI", "Immeuble", "Lot", "Locataire", "Bail", "Loyer", "Facture", "Encaissement", "Banque", "Rapprochement", "TVA", "Fiscalité", "Calendrier", "Document", "Archive"
+  ]
+}

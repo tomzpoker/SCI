@@ -1,0 +1,22 @@
+SCI FAMILY RUST — S10/S11/S12 DELIVERY
+
+Migrations:
+- migrations/0020_fiscality.sql
+- migrations/0021_unpaid_recovery.sql
+- migrations/0022_document_generation.sql
+
+Code:
+- src/fiscal.rs
+- src/collections.rs
+- src/generation/mod.rs
+- src/generation/pdf.rs
+- src/ui.rs
+- src/lib.rs
+
+Verification:
+- scripts/verify-s10-fiscality.ps1
+- scripts/verify-s11-recovery.ps1
+- scripts/verify-s12-generation.ps1
+- scripts/verify-s10-s12-final.ps1
+
+Status: READY FOR REVIEW

@@ -1,0 +1,8 @@
+SCI Family Rust — S17 TESTS & HARDENING
+
+Depuis D:\SCI\DEV\SCI-family-rust
+
+1. Contrôle statique : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s17-s19-final.ps1
+2. Tests unitaires : cargo test --lib --features server
+3. Tests déterministes : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1
+4. Tests DB : $env:SCI_RUN_DB_TESTS='1';$env:SCI_TEST_AUTH='1';powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-tests.ps1 -Database

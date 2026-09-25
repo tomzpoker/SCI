@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod approval;
+pub mod control;
 pub mod llm;
 pub mod tools;
 
@@ -31,12 +32,15 @@ pub struct AssistantResponse {
     pub message: String,
     pub action: AssistantAction,
     pub requires_user_approval: bool,
+    pub provider_id: Option<String>,
+    pub proposal_id: Option<Uuid>,
+    pub uncertainty: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantContext {
     pub workspace_id: Uuid,
-    pub sci_id: Uuid,
+    pub legal_entity_id: Uuid,
 }
 
 impl AssistantResponse {
@@ -45,6 +49,9 @@ impl AssistantResponse {
             message: message.into(),
             action: AssistantAction::Read,
             requires_user_approval: false,
+            provider_id: None,
+            proposal_id: None,
+            uncertainty: String::new(),
         }
     }
 
@@ -53,6 +60,9 @@ impl AssistantResponse {
             message: message.into(),
             action: AssistantAction::Propose,
             requires_user_approval: true,
+            provider_id: None,
+            proposal_id: None,
+            uncertainty: String::new(),
         }
     }
 
@@ -61,6 +71,9 @@ impl AssistantResponse {
             message: message.into(),
             action: AssistantAction::Execute,
             requires_user_approval: false,
+            provider_id: None,
+            proposal_id: None,
+            uncertainty: String::new(),
         }
     }
 }

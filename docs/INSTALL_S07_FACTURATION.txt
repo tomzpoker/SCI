@@ -1,0 +1,31 @@
+SCI Family Rust — S07 Facturation
+=================================
+
+Projet : D:\SCI\DEV\SCI-family-rust
+Migration : migrations\0017_billing_invoicing.sql
+Module : src\billing.rs
+
+1. Ouvrir PowerShell.
+2. Se placer dans le projet :
+   cd D:\SCI\DEV\SCI-family-rust
+3. Vérifier le sprint :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s07-billing.ps1
+4. Démarrer PostgreSQL et l'application comme d'habitude :
+   .\scripts\start.ps1
+
+La migration 0017 est exécutée automatiquement au démarrage serveur par SQLx.
+
+Commandes de validation Windows :
+   cargo test --lib --features server
+   cargo check --features server
+
+Facturation électronique :
+- Le module stocke une plateforme active et conserve l'historique des anciennes plateformes.
+- Les secrets ne sont pas stockés en clair dans PostgreSQL ; credentials_reference est une référence opaque.
+- Le module prépare un flux neutre et journalise les événements, mais n'envoie pas encore vers une plateforme agréée.
+- L'adaptateur devra être branché au prestataire choisi sans changer le cœur métier des factures.
+
+PDF :
+- Les brouillons portent explicitement « BROUILLON — SANS EFFET EXTERNE ».
+- Le PDF est généré hors PostgreSQL sous SCI_BILLING_PDF_ROOT ou .sci-billing.
+- Après validation/émission, le marquage brouillon disparaît.

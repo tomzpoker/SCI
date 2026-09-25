@@ -1,0 +1,8 @@
+{
+  "id": "VAT-BASIC-2026-09",
+  "rule_version": "VAT-CASH-2026.1",
+  "date": "2026-09-25",
+  "inputs": {"net_cents": 100000, "vat_rate_bp": 2000, "paid": true},
+  "expected_output": {"vat_cents": 20000, "payable_cents": 20000},
+  "source": {"name": "Référentiel fiscal TVA", "reference": "FIXTURE-S07-S10-001"}
+}

@@ -70,6 +70,120 @@ pub struct ModuleCounts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityItem {
+    pub id: Uuid,
+    pub legal_name: String,
+    pub legal_form_code: String,
+    pub tax_regime: String,
+    pub vat_status: String,
+    pub vat_basis: String,
+    pub siren: String,
+    pub siret: String,
+    pub registered_office: String,
+    pub accounting_period_start: u8,
+    pub fiscal_year_end: u8,
+    pub currency_code: String,
+    pub active: bool,
+    pub bank_accounts_count: i64,
+    pub primary_iban: String,
+    pub primary_bic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityBankAccountItem {
+    pub id: Uuid,
+    pub legal_entity_id: Uuid,
+    pub label: String,
+    pub iban: String,
+    pub bic: String,
+    pub is_primary: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalActivityCatalogItem {
+    pub code: String,
+    pub label: String,
+    pub description: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityActivityItem {
+    pub legal_entity_id: Uuid,
+    pub activity_code: String,
+    pub label: String,
+    pub description: String,
+    pub is_primary: bool,
+    pub active: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BusinessProfileCatalogItem {
+    pub code: String,
+    pub label: String,
+    pub description: String,
+    pub legal_form_code: String,
+    pub default_tax_regime: String,
+    pub module_key: String,
+    pub capabilities: serde_json::Value,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityBusinessProfileItem {
+    pub legal_entity_id: Uuid,
+    pub profile_code: String,
+    pub label: String,
+    pub description: String,
+    pub legal_form_code: String,
+    pub default_tax_regime: String,
+    pub module_key: String,
+    pub capabilities: serde_json::Value,
+    pub is_primary: bool,
+    pub active: bool,
+    pub configuration: serde_json::Value,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityBusinessProfileDraft {
+    pub legal_entity_id: Uuid,
+    pub profile_code: String,
+    pub is_primary: bool,
+    pub active: bool,
+    pub configuration: serde_json::Value,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityActivityDraft {
+    pub legal_entity_id: Uuid,
+    pub activity_code: String,
+    pub is_primary: bool,
+    pub active: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LegalEntityDraft {
+    pub legal_name: String,
+    pub legal_form_code: String,
+    pub tax_regime: String,
+    pub vat_status: String,
+    pub vat_basis: String,
+    pub siren: String,
+    pub siret: String,
+    pub registered_office: String,
+    pub accounting_period_start: u8,
+    pub fiscal_year_end: u8,
+    pub currency_code: String,
+    pub primary_iban: String,
+    pub primary_bic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SciProfile {
     pub legal_name: String,
     pub siren: String,
@@ -223,6 +337,152 @@ pub struct DocumentItem {
     pub storage_key: String,
     pub document_date: Option<NaiveDate>,
     pub expires_at: Option<NaiveDate>,
+    pub origin: String,
+    pub file_size_bytes: i64,
+    pub mime_type: String,
+    pub status: String,
+    pub ocr_status: String,
+    pub classification_confidence: Decimal,
+    pub extraction_confidence: Decimal,
+    pub duplicate_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseDetailItem {
+    pub id: Uuid,
+    pub reference: String,
+    pub unit_id: Uuid,
+    pub unit_label: String,
+    pub property_name: String,
+    pub tenant_id: Uuid,
+    pub tenant_name: String,
+    pub signature_date: Option<NaiveDate>,
+    pub effect_date: NaiveDate,
+    pub end_date: Option<NaiveDate>,
+    pub lease_type: String,
+    pub destination: String,
+    pub rent_amount_cents: i64,
+    pub rent_frequency: String,
+    pub payment_day: i16,
+    pub vat_mode: String,
+    pub index_code: String,
+    pub index_base_value: Option<Decimal>,
+    pub index_base_date: Option<NaiveDate>,
+    pub index_cap_bp: Option<i32>,
+    pub charges_mode: String,
+    pub charges_amount_cents: i64,
+    pub security_deposit_expected_cents: i64,
+    pub entry_fee_expected_cents: i64,
+    pub entry_fee_status: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseClauseItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub code: String,
+    pub title: String,
+    pub clause_type: String,
+    pub body: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub version_no: i32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseIndexItem {
+    pub id: Uuid,
+    pub index_code: String,
+    pub period_label: String,
+    pub value: Decimal,
+    pub source_reference: String,
+    pub verified_at: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseChargeItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub charge_type: String,
+    pub mode: String,
+    pub amount_cents: i64,
+    pub variable_formula: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseReductionItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub amount_cents: Option<i64>,
+    pub percentage_bp: Option<i32>,
+    pub reason: String,
+    pub original_rent_cents: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseDepositItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub movement_type: String,
+    pub amount_cents: i64,
+    pub movement_date: NaiveDate,
+    pub justification: String,
+    pub bank_transaction_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseGuaranteeItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub guarantee_type: String,
+    pub guarantor_name: String,
+    pub amount_cents: Option<i64>,
+    pub start_date: Option<NaiveDate>,
+    pub end_date: Option<NaiveDate>,
+    pub document_id: Option<Uuid>,
+    pub notes: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LeaseRentRevisionItem {
+    pub id: Uuid,
+    pub lease_id: Uuid,
+    pub calculation_date: NaiveDate,
+    pub effective_date: NaiveDate,
+    pub rule_text: String,
+    pub index_code: String,
+    pub index_period: String,
+    pub old_rent_cents: i64,
+    pub index_old: Option<Decimal>,
+    pub index_new: Option<Decimal>,
+    pub cap_bp: Option<i32>,
+    pub new_rent_cents: i64,
+    pub formula: String,
+    pub result_status: String,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentFolderItem {
+    pub code: String,
+    pub label: String,
+    pub relative_path: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentStorageConfigItem {
+    pub legal_entity_id: Uuid,
+    pub root_path: String,
+    pub folder_overrides: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -246,6 +506,21 @@ pub struct AuditItem {
     pub action: String,
     pub entity_type: String,
     pub payload: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChangeHistoryItem {
+    pub id: i64,
+    pub effective_at: DateTime<Utc>,
+    pub recorded_at: DateTime<Utc>,
+    pub author: String,
+    pub action: String,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub reason: String,
+    pub before_state: String,
+    pub after_state: String,
+    pub metadata: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

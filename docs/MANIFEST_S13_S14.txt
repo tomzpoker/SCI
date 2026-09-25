@@ -1,0 +1,22 @@
+SCI FAMILY RUST — MANIFEST S13-S14
+
+Migrations:
+migrations/0023_einvoicing.sql
+migrations/0024_ai_controlled.sql
+migrations/0025_einvoicing_runtime.sql
+migrations/0026_ai_controlled.sql
+
+Code:
+src/einvoice.rs
+src/assistant/llm.rs
+src/assistant/tools.rs
+src/assistant/control.rs
+src/assistant/mod.rs
+src/documents/workflow.rs
+src/ui.rs
+src/fiscal.rs
+
+Validation:
+scripts/verify-s13-einvoicing.ps1
+scripts/verify-s14-ai.ps1
+scripts/verify-s13-s14-final.ps1

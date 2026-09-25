@@ -14,7 +14,10 @@ pub fn extract(input: ExtractionInput) -> DocumentExtraction {
         DocumentType::InvoiceSupplier => extract_supplier_invoice(&input.text),
         DocumentType::RentInvoice => extract_rent_invoice(&input.text),
         DocumentType::BankStatement => extract_bank_statement(&input.text),
-        _ => Vec::new(),
+        DocumentType::Lease | DocumentType::LeaseAmendment => extract_lease(&input.text),
+        DocumentType::TaxDocument => extract_tax(&input.text),
+        DocumentType::Correspondence => extract_correspondence(&input.text),
+        DocumentType::SupportingDocument | DocumentType::Insurance | DocumentType::Administrative | DocumentType::PaymentProof | DocumentType::Unknown => Vec::new(),
     };
     DocumentExtraction {
         document_id: input.document_id,
@@ -60,6 +63,30 @@ fn extract_bank_statement(text: &str) -> Vec<ExtractedField> {
     ]
 }
 
+fn extract_lease(text: &str) -> Vec<ExtractedField> {
+    vec![
+        field("reference", find_after(text, &["référence", "reference", "n°"]), 0.60),
+        field("tenant", find_after(text, &["preneur", "locataire"]), 0.70),
+        field("rent", find_after(text, &["loyer", "loyer mensuel"]), 0.65),
+        field("index", find_after(text, &["indice", "ILC", "ICC"]), 0.60),
+    ]
+}
+
+fn extract_tax(text: &str) -> Vec<ExtractedField> {
+    vec![
+        field("tax_type", find_after(text, &["taxe", "impôt"]), 0.65),
+        field("reference", find_after(text, &["référence", "reference"]), 0.55),
+        field("amount", find_after(text, &["montant", "total"]), 0.55),
+    ]
+}
+
+fn extract_correspondence(text: &str) -> Vec<ExtractedField> {
+    vec![
+        field("sender", find_after(text, &["de", "expéditeur"]), 0.45),
+        field("date", find_after(text, &["date"]), 0.45),
+    ]
+}
+
 fn field(name: &str, value: String, confidence: f32) -> ExtractedField {
     ExtractedField {
         name: name.to_string(),
@@ -83,4 +110,16 @@ fn find_after(text: &str, labels: &[&str]) -> String {
         }
     }
     String::new()
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn extracts_lease_fields() {
+        let r=extract(ExtractionInput{document_id:uuid::Uuid::nil(),document_type:DocumentType::Lease,text:"Référence B-12\nPreneur ACME\nLoyer 1500\nIndice ILC".into()});
+        assert!(r.fields.iter().any(|f| f.name=="rent" && f.value.contains("1500")));
+        assert!(r.fields.iter().any(|f| f.name=="index" && f.value.contains("ILC")));
+    }
 }
