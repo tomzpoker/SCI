@@ -21,6 +21,7 @@ use crate::workflow::{WorkflowPage, ValidationInboxPage};
 use crate::server::*;
 use chrono::{Duration, NaiveDate, Utc};
 use dioxus::prelude::*;
+use std::collections::BTreeMap;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
@@ -60,7 +61,7 @@ enum Page {
 impl Page {
     fn label(self) -> &'static str {
         match self {
-            Page::Dashboard => "Vue d’ensemble",
+            Page::Dashboard => "Accueil",
             Page::Setup => "Configuration",
             Page::LegalEntities => "Entités",
             Page::SarlActivities => "Activités SARL",
@@ -70,22 +71,22 @@ impl Page {
             Page::ValidationInbox => "Validations",
             Page::Associates => "Associés",
             Page::Tenants => "Locataires",
-            Page::Patrimony => "Patrimoine",
+            Page::Patrimony => "Biens",
             Page::Rentals => "Locations",
             Page::Billing => "Facturation",
             Page::EInvoice => "E-facturation",
             Page::Assistant => "Assistant IA",
-            Page::Bank => "Banque",
+            Page::Bank => "Argent",
             Page::Treasury => "Trésorerie",
             Page::Vat => "Fiscalité",
             Page::Recovery => "Impayés & recouvrement",
             Page::Generation => "Courriers / PDF",
-            Page::Calendar => "Calendrier",
+            Page::Calendar => "Échéances",
             Page::Documents => "Documents",
             Page::Automations => "Automatisations",
             Page::Tasks => "Tâches",
             Page::Audit => "Audit",
-            Page::ZeroSaisie => "Zéro-saisie",
+            Page::ZeroSaisie => "À vérifier",
             Page::Security => "Sécurité / Recovery",
         }
     }
@@ -115,10 +116,51 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
     let custom_style=pref.as_ref().and_then(|p|{let a=p.custom_theme.get("accent").and_then(|v|v.as_str()).unwrap_or("");let b=p.custom_theme.get("background").and_then(|v|v.as_str()).unwrap_or("");if a.is_empty()&&b.is_empty(){None}else{Some(format!("--custom-accent:{};--custom-background:{};",a,b))}}).unwrap_or_default();
     let role_label=auth_status.role.clone().unwrap_or_else(||"Rôle inconnu".into());
     rsx!{div {class:"{shell_class}",style:"{custom_style}",aside{class:"sidebar",div {class:"brand","SCI FAMILY"},div {class:"brand-sub","PILOTAGE ADMINISTRATIF AUTONOME"},div {class:"session-chip",div {class:"small","Session"},strong {"{auth_status.display_name.clone().unwrap_or_default()}"},span {class:"small","{role_label}"}},nav {
-        NavItem{page,current:Page::Dashboard} NavItem{page,current:Page::ZeroSaisie} NavItem{page,current:Page::Setup}
-        NavItem{page,current:Page::LegalEntities} NavItem{page,current:Page::SarlActivities} NavItem{page,current:Page::Rules} NavItem{page,current:Page::Engines} NavItem{page,current:Page::Workflows} NavItem{page,current:Page::ValidationInbox} NavItem{page,current:Page::Associates} NavItem{page,current:Page::Tenants}
-        NavItem{page,current:Page::Patrimony} NavItem{page,current:Page::Rentals} NavItem{page,current:Page::Billing} NavItem{page,current:Page::EInvoice} NavItem{page,current:Page::Assistant} NavItem{page,current:Page::Bank} NavItem{page,current:Page::Treasury}
-        NavItem{page,current:Page::Vat} NavItem{page,current:Page::Recovery} NavItem{page,current:Page::Generation} NavItem{page,current:Page::Calendar} NavItem{page,current:Page::Documents} NavItem{page,current:Page::Automations} NavItem{page,current:Page::Tasks} NavItem{page,current:Page::Audit} NavItem{page,current:Page::Security}
+        NavItem{page,current:Page::Dashboard}
+        NavItem{page,current:Page::ZeroSaisie}
+        NavItem{page,current:Page::Bank}
+        NavItem{page,current:Page::Patrimony}
+        NavItem{page,current:Page::Tenants}
+        NavItem{page,current:Page::Documents}
+        NavItem{page,current:Page::Calendar}
+
+        div {
+            class: "nav-separator"
+        }
+
+        NavItem{page,current:Page::Setup}
+
+        details {
+            class: "expert-nav",
+
+            summary {
+                "🛠️ Outils avancés"
+            }
+
+            div {
+                class: "expert-nav-list",
+
+                NavItem{page,current:Page::Treasury}
+                NavItem{page,current:Page::Associates}
+                NavItem{page,current:Page::Rentals}
+                NavItem{page,current:Page::Billing}
+                NavItem{page,current:Page::EInvoice}
+                NavItem{page,current:Page::Assistant}
+                NavItem{page,current:Page::Vat}
+                NavItem{page,current:Page::Recovery}
+                NavItem{page,current:Page::Generation}
+                NavItem{page,current:Page::Automations}
+                NavItem{page,current:Page::Tasks}
+                NavItem{page,current:Page::ValidationInbox}
+                NavItem{page,current:Page::Workflows}
+                NavItem{page,current:Page::Rules}
+                NavItem{page,current:Page::Engines}
+                NavItem{page,current:Page::LegalEntities}
+                NavItem{page,current:Page::SarlActivities}
+                NavItem{page,current:Page::Audit}
+                NavItem{page,current:Page::Security}
+            }
+        }
     },div {class:"sidebar-footer","Données locales • règles versionnées • audit"},button {class:"secondary logout-button",onclick:move |_|{let cb=on_logout.clone();async move{let _=crate::security::logout().await;dioxus::fullstack::clear_request_headers();cb.call(())}},"Se déconnecter"}},main {class:"main",header {class:"topbar",div {div {class:"eyebrow","SCI FAMILY PILOT • {role_label}"},h1 {"{page().label()}" }},div {class:"top-actions",EntityScopeSelector{refresh,page,initial_entity_id:auth_status.legal_entity_id},button {class:"secondary",onclick:move |_|page.set(Page::Setup),"Configuration"},button {class:"primary",onclick:move |_|async move{let _=run_anticipation_cycle().await;refresh+=1},"Lancer l’anticipation"}}},match page(){
         Page::Dashboard=>rsx!{Dashboard{refresh,on_setup:move |_|page.set(Page::Setup)}},
         Page::ZeroSaisie=>rsx!{ZeroSaisiePage{refresh}}, Page::Security=>rsx!{SecurityPage{refresh,on_logged_out:move |_|on_logout.call(())}},
@@ -185,116 +227,525 @@ fn NavItem(mut page: Signal<Page>, current: Page) -> Element {
 fn Dashboard(refresh: Signal<u64>, on_setup: EventHandler<MouseEvent>) -> Element {
     let data = use_resource(move || {
         let _ = refresh();
-        async move { dashboard_snapshot().await.ok() }
+        async move {
+            dashboard_snapshot().await.ok()
+        }
     });
+
     let counts = use_resource(move || {
         let _ = refresh();
-        async move { module_counts().await.ok() }
+        async move {
+            module_counts().await.ok()
+        }
     });
+
     let status = use_resource(move || {
         let _ = refresh();
-        async move { onboarding_status().await.ok() }
+        async move {
+            onboarding_status().await.ok()
+        }
     });
 
-    match (&*data.read(), &*counts.read(), &*status.read()) {
-        (Some(Some(d)), Some(Some(c)), Some(Some(s))) => rsx! {
-            if !s.completed {
-                section {class:"setup-banner",
-                    div {
+    let real_history = use_resource(move || {
+        let _ = refresh();
+        async move {
+            dashboard_real_cash_history(12).await.ok()
+        }
+    });
+
+    let treasury = use_resource(move || {
+        let _ = refresh();
+        async move {
+            crate::treasury::build_treasury_forecast(
+                12,
+                "BASE".to_string()
+            )
+            .await
+            .ok()
+        }
+    });
+
+    match (
+        &*data.read(),
+        &*counts.read(),
+        &*status.read(),
+        &*real_history.read(),
+        &*treasury.read()
+    ) {
+        (
+            Some(Some(d)),
+            Some(Some(c)),
+            Some(Some(s)),
+            Some(Some(real)),
+            Some(Some(forecast))
+        ) => {
+            let forecast_3m = forecast
+                .points
+                .get(2)
+                .map(|p| p.balance_cents)
+                .unwrap_or(forecast.ending_balance_cents);
+
+            let forecast_min = forecast.minimum_balance_cents;
+
+            rsx! {
+                if !s.completed {
+                    section {
+                        class: "setup-banner",
+
                         div {
-                            class:"eyebrow",
-                            "MISE EN ROUTE • {s.completion_pct}%"
+                            div {
+                                class: "eyebrow",
+                                "MISE EN ROUTE • {s.completion_pct}%"
+                            }
+
+                            h2 {
+                                "Votre SCI passe du déclaratif au pilotage"
+                            }
+
+                            p {
+                                "Configurez les référentiels une fois ; les baux, factures, encaissements, TVA, banque et échéances seront ensuite reliés."
+                            }
                         }
-                        h2 {"Votre SCI passe du déclaratif au pilotage"}
-                        p {"Configurez les référentiels une fois ; les baux, factures, encaissements, TVA, banque et échéances seront ensuite reliés."}
-                    }
-                    button {class:"primary",onclick:on_setup,"Continuer"}
-                }
-            }
 
-            section {class:"welcome",
-                div {
-                    span {class:"pill","SCI À L’IR"}
-                    span {class:"pill muted","TVA sur encaissements"}
-                    h2 {"{d.sci_name}" }
-                    p {"{d.registered_office}" }
-                }
-                div {class:"risk-block",
-                    div {class:"eyebrow","VIGILANCE"}
-                    div { class: "risk", "{d.risk_level}" }
-                    div { class: "small", {format!("{} tâche(s) en retard", d.overdue_tasks)} }
-                }
-            }
-
-            ZeroSaisieSummary{refresh}
-
-            section {class:"metric-row",
-                Metric{label:"Trésorerie",value:euro(d.cash_cents),tone:"positive"}
-                Metric{label:"Créances",value:euro(d.receivables_cents),tone:"neutral"}
-                Metric{label:"TVA du mois",value:euro(d.vat_to_prepare_cents),tone:"warning"}
-                Metric{label:"À traiter < 30 j",value:d.tasks_due_30d.to_string(),tone:"neutral"}
-            }
-
-            section {class:"module-grid",
-                ModuleCard{title:"Associés",value:c.associates.to_string(),label:"actifs",detail:"Capital et comptes courants"}
-                ModuleCard{title:"Patrimoine",value:c.properties.to_string(),label:"biens",detail:format!("{} lots",c.units)}
-                ModuleCard{title:"Locataires",value:c.tenants.to_string(),label:"actifs",detail:"Tiers exploitables"}
-                ModuleCard{title:"Locations",value:c.leases.to_string(),label:"baux",detail:"Révision et facturation"}
-                ModuleCard{title:"Facturation",value:c.invoices.to_string(),label:"factures",detail:format!("{} paiements",c.payments)}
-                ModuleCard{title:"Banque",value:c.bank_transactions.to_string(),label:"mouvements",detail:format!("{} non rapprochés",c.unmatched_bank)}
-                ModuleCard{title:"TVA",value:euro(c.vat_receipts_cents),label:"encaissé ce mois",detail:"Exigibilité calculée"}
-                ModuleCard{title:"Documents",value:c.documents.to_string(),label:"pièces",detail:"Référentiel documentaire"}
-                ModuleCard{title:"Tâches",value:c.open_tasks.to_string(),label:"ouvertes",detail:"Workflow administratif"}
-            }
-
-            section {class:"two-col",
-                div {class:"panel",
-                    div {class:"panel-head",
-                        h3 {"Prochaines actions"}
-                        span {class:"small","Priorisées"}
-                    }
-                    if d.next_actions.is_empty() {
-                        EmptyState{title:"Aucune action",text:"Lancez l’anticipation pour générer les premières tâches."}
-                    }
-                    for t in d.next_actions.iter() {
-                        TaskRow{task:t.clone()}
+                        button {
+                            class: "primary",
+                            onclick: on_setup,
+                            "Continuer"
+                        }
                     }
                 }
-                div {class:"panel",
-                    div {class:"panel-head",
-                        h3 {"Trésorerie prévisionnelle"}
-                        span {class:"small","12 mois"}
+
+                section {
+                    class: "home-greeting",
+
+                    div {
+                        span {
+                            class: "pill",
+                            "SCI À L’IR"
+                        }
+
+                        span {
+                            class: "pill muted",
+                            "TVA sur encaissements"
+                        }
+
+                        h2 {
+                            "{d.sci_name}"
+                        }
+
+                        p {
+                            "Voici ce qui mérite ton attention aujourd’hui."
+                        }
                     }
-                    div {class:"forecast-grid",
-                        for f in d.forecast.iter().take(6) {
-                            div {class:"forecast-card",
-                                div { class: "small", {f.date.format("%b %Y").to_string()} }
-                                div { class: "forecast-value", "{euro(f.balance_cents)}" }
-                                div { class: "small", {format!("+{} / -{}", euro(f.expected_inflows_cents), euro(f.expected_outflows_cents))} }
+
+                    div {
+                        class: "home-risk",
+
+                        div {
+                            class: "eyebrow",
+                            "VIGILANCE"
+                        }
+
+                        div {
+                            class: format!("risk risk-{}", d.risk_level.to_lowercase()),
+                            "{d.risk_level}"
+                        }
+
+                        div {
+                            class: "small",
+                            "{d.overdue_tasks} tâche(s) en retard"
+                        }
+                    }
+                }
+
+                ZeroSaisieSummary {
+                    refresh
+                }
+
+                section {
+                    class: "metric-row home-metrics",
+
+                    Metric {
+                        label: "Argent réel",
+                        value: euro(d.cash_cents),
+                        tone: "positive"
+                    }
+
+                    Metric {
+                        label: "Prévu à 3 mois",
+                        value: euro(forecast_3m),
+                        tone: "neutral"
+                    }
+
+                    Metric {
+                        label: "Point bas prévu",
+                        value: euro(forecast_min),
+                        tone: "warning"
+                    }
+
+                    Metric {
+                        label: "À traiter < 30 j",
+                        value: d.tasks_due_30d.to_string(),
+                        tone: "neutral"
+                    }
+                }
+
+                section {
+                    class: "module-grid home-modules",
+
+                    ModuleCard {
+                        title: "Argent",
+                        value: euro(d.cash_cents),
+                        label: "solde réel",
+                        detail: format!(
+                            "Prévu à 3 mois : {}",
+                            euro(forecast_3m)
+                        )
+                    }
+
+                    ModuleCard {
+                        title: "Biens",
+                        value: c.properties.to_string(),
+                        label: "propriétés",
+                        detail: format!(
+                            "{} lots",
+                            c.units
+                        )
+                    }
+
+                    ModuleCard {
+                        title: "Locataires",
+                        value: c.tenants.to_string(),
+                        label: "actifs",
+                        detail: format!(
+                            "{} baux",
+                            c.leases
+                        )
+                    }
+
+                    ModuleCard {
+                        title: "Documents",
+                        value: c.documents.to_string(),
+                        label: "pièces",
+                        detail: "Import, lecture et validation"
+                    }
+
+                    ModuleCard {
+                        title: "Échéances",
+                        value: c.tax_deadlines.to_string(),
+                        label: "à venir",
+                        detail: format!(
+                            "{} tâche(s) ouvertes",
+                            c.open_tasks
+                        )
+                    }
+
+                    ModuleCard {
+                        title: "TVA",
+                        value: euro(c.vat_receipts_cents),
+                        label: "encaissé ce mois",
+                        detail: "Calculée depuis les encaissements"
+                    }
+                }
+
+                TreasuryDualCurveChart {
+                    real_history: real.clone(),
+                    forecast: forecast.points.clone()
+                }
+
+                section {
+                    class: "two-col home-bottom",
+
+                    div {
+                        class: "panel",
+
+                        div {
+                            class: "panel-head",
+
+                            h3 {
+                                "🔔 J’ai besoin de toi"
+                            }
+
+                            span {
+                                class: "small",
+                                "Priorisé"
+                            }
+                        }
+
+                        if d.next_actions.is_empty() {
+                            EmptyState {
+                                title: "Rien à faire",
+                                text: "Ta SCI est à jour pour le moment."
+                            }
+                        }
+
+                        for t in d.next_actions.iter().take(6) {
+                            TaskRow {
+                                task: t.clone()
                             }
                         }
                     }
-                    div {class:"forecast-min",
-                        "Point bas : "
-                        {euro(d.forecast_min_cash_cents)}
+
+                    div {
+                        class: "panel",
+
+                        div {
+                            class: "panel-head",
+
+                            h3 {
+                                "État de préparation"
+                            }
+
+                            span {
+                                class: "small",
+                                "Données fiables"
+                            }
+                        }
+
+                        div {
+                            class: "check-grid",
+
+                            Check {
+                                ok: s.profile_ready,
+                                title: "SCI",
+                                text: "Identité"
+                            }
+
+                            Check {
+                                ok: s.associates_ready,
+                                title: "Associés",
+                                text: "Capital"
+                            }
+
+                            Check {
+                                ok: s.property_ready,
+                                title: "Biens",
+                                text: "Patrimoine"
+                            }
+
+                            Check {
+                                ok: s.tenant_ready,
+                                title: "Locataires",
+                                text: "Tiers"
+                            }
+
+                            Check {
+                                ok: s.lease_ready,
+                                title: "Baux",
+                                text: "Occupation"
+                            }
+
+                            Check {
+                                ok: s.finance_ready,
+                                title: "Argent",
+                                text: "Flux"
+                            }
+
+                            Check {
+                                ok: s.automation_ready,
+                                title: "Moteur",
+                                text: "Automatisations"
+                            }
+                        }
                     }
                 }
             }
+        },
 
-            section {class:"panel",
-                h3 {"État de préparation"}
-                div {class:"check-grid",
-                    Check{ok:s.profile_ready,title:"SCI",text:"Identité et siège"}
-                    Check{ok:s.associates_ready,title:"Associés",text:"Capital"}
-                    Check{ok:s.property_ready,title:"Patrimoine",text:"Bien + lot"}
-                    Check{ok:s.tenant_ready,title:"Locataires",text:"Tiers"}
-                    Check{ok:s.lease_ready,title:"Baux",text:"Occupation"}
-                    Check{ok:s.finance_ready,title:"Flux",text:"Banque ou factures"}
-                    Check{ok:s.automation_ready,title:"Moteur",text:"Règles actives"}
+        _ => rsx! {
+            Loading {}
+        },
+    }
+}
+#[server]
+pub async fn dashboard_real_cash_history(months: i32) -> Result<Vec<(NaiveDate, i64)>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        use sqlx::Row;
+        let months = months.clamp(3, 24);
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        let entity = crate::entity_scope::current_legal_entity_id();
+        let rows = sqlx::query(
+            r#"
+            WITH months AS (
+                SELECT date_trunc(
+                    'month', CURRENT_DATE + (g || ' month')::interval
+                )::date AS month_start
+                FROM generate_series(-($1::int - 1), 0) g
+            )
+            SELECT
+                m.month_start,
+                (
+                    COALESCE((
+                        SELECT SUM(opening_balance_cents)::bigint
+                        FROM bank_account_profiles
+                        WHERE legal_entity_id = $2 AND active
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(amount_cents)::bigint
+                        FROM bank_transactions
+                        WHERE legal_entity_id = $2
+                          AND transaction_date < (m.month_start + interval '1 month')::date
+                    ), 0)
+                )::bigint AS balance_cents
+            FROM months m
+            ORDER BY m.month_start
+            "#,
+        )
+        .bind(months)
+        .bind(entity)
+        .fetch_all(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("month_start"), r.get("balance_cents")))
+            .collect())
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = months;
+        Err(ServerFnError::new(
+            "dashboard_real_cash_history est exécutée côté serveur",
+        ))
+    }
+}
+
+#[derive(Clone)]
+struct CurveScale {
+    min: f64,
+    max: f64,
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+fn curve_x(index: usize, count: usize, scale: &CurveScale) -> f64 {
+    if count <= 1 {
+        return scale.left;
+    }
+    scale.left + (index as f64 / (count - 1) as f64) * (scale.right - scale.left)
+}
+
+fn curve_y(value_cents: i64, scale: &CurveScale) -> f64 {
+    let span = (scale.max - scale.min).max(1.0);
+    scale.bottom - ((value_cents as f64 / 100.0 - scale.min) / span) * (scale.bottom - scale.top)
+}
+
+fn build_curve_path(
+    dates: &[NaiveDate],
+    values: &BTreeMap<NaiveDate, i64>,
+    scale: &CurveScale,
+) -> String {
+    let mut path = String::new();
+    let mut drawing = false;
+    for (index, date) in dates.iter().enumerate() {
+        let Some(value) = values.get(date) else {
+            drawing = false;
+            continue;
+        };
+        let x = curve_x(index, dates.len(), scale);
+        let y = curve_y(*value, scale);
+        if drawing {
+            path.push_str(&format!(" L {:.1} {:.1}", x, y));
+        } else {
+            path.push_str(&format!("M {:.1} {:.1}", x, y));
+            drawing = true;
+        }
+    }
+    path
+}
+
+#[component]
+fn TreasuryDualCurveChart(
+    real_history: Vec<(NaiveDate, i64)>,
+    forecast: Vec<crate::treasury::TreasuryForecastPointItem>,
+) -> Element {
+    let mut dates = Vec::<NaiveDate>::new();
+    for (date, _) in &real_history {
+        if !dates.contains(date) {
+            dates.push(*date);
+        }
+    }
+    for point in &forecast {
+        if !dates.contains(&point.date) {
+            dates.push(point.date);
+        }
+    }
+    dates.sort_unstable();
+
+    let mut real = BTreeMap::<NaiveDate, i64>::new();
+    for (date, value) in real_history {
+        real.insert(date, value);
+    }
+    let mut planned = BTreeMap::<NaiveDate, i64>::new();
+    for point in forecast {
+        planned.insert(point.date, point.balance_cents);
+    }
+
+    let mut all_values = Vec::<i64>::new();
+    all_values.extend(real.values().copied());
+    all_values.extend(planned.values().copied());
+    let min_eur = all_values
+        .iter()
+        .map(|v| *v as f64 / 100.0)
+        .fold(f64::INFINITY, f64::min);
+    let max_eur = all_values
+        .iter()
+        .map(|v| *v as f64 / 100.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((max_eur - min_eur).abs() * 0.12).max(300.0);
+    let scale = CurveScale {
+        min: min_eur - pad,
+        max: max_eur + pad,
+        left: 22.0,
+        right: 738.0,
+        top: 20.0,
+        bottom: 235.0,
+    };
+    let real_path = build_curve_path(&dates, &real, &scale);
+    let planned_path = build_curve_path(&dates, &planned, &scale);
+    let y0 = curve_y(((scale.min + scale.max) / 2.0 * 100.0) as i64, &scale);
+
+    rsx! {
+        section { class: "panel dual-curve-panel",
+            div { class: "panel-head dual-curve-head",
+                div {
+                    h3 { "💰 Trésorerie" }
+                    div { class: "small", "Ce qui est arrivé • ce qui est prévu" }
+                }
+                div { class: "curve-legend",
+                    span { class: "curve-legend-item real", span { class: "curve-dot" }, "Réel" }
+                    span { class: "curve-legend-item planned", span { class: "curve-dot" }, "Prévu" }
                 }
             }
-        },
-        _ => rsx! {Loading{}},
+            if dates.is_empty() {
+                div { class: "empty-state", h3 { "Pas encore assez de données" }, p { "Le graphique apparaîtra dès que la banque et le prévisionnel contiendront des données." } }
+            } else {
+                div { class: "dual-curve-wrap",
+                    svg { class: "dual-curve-svg", view_box: "0 0 760 280", preserve_aspect_ratio: "none",
+                        line { x1: "22", y1: "45", x2: "738", y2: "45", class: "curve-grid-line" }
+                        line { x1: "22", y1: "95", x2: "738", y2: "95", class: "curve-grid-line" }
+                        line { x1: "22", y1: "145", x2: "738", y2: "145", class: "curve-grid-line" }
+                        line { x1: "22", y1: "195", x2: "738", y2: "195", class: "curve-grid-line" }
+                        line { x1: "22", y1: "{y0}", x2: "738", y2: "{y0}", class: "curve-zero-line" }
+                        path { d: "{planned_path}", class: "curve-line planned" }
+                        path { d: "{real_path}", class: "curve-line real" }
+                        for (index, date) in dates.iter().enumerate().filter(|(i, _)| *i % 3 == 0 || *i + 1 == dates.len()) {
+                            text { x: "{curve_x(index, dates.len(), &scale)}", y: "260", class: "curve-x-label", text_anchor: "middle", "{date.format(\"%b %Y\").to_string()}" }
+                        }
+                    }
+                }
+                div { class: "dual-curve-note",
+                    span { "Réel" }
+                    span { "→ mouvements bancaires constatés" }
+                    span { "Prévu" }
+                    span { "→ projection de trésorerie du moteur" }
+                }
+            }
+        }
     }
 }
 
