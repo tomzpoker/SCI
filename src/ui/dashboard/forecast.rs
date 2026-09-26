@@ -1,4 +1,13 @@
 ﻿use dioxus::prelude::*;
+use uuid::Uuid;
+
+use crate::prevision::{
+    create_prevision_flow, delete_prevision_flow, list_prevision_flows,
+    set_prevision_flow_active, set_prevision_flow_matches, update_prevision_flow,
+    PrevisionFlowDraft, PrevisionFlowItem,
+};
+use crate::server::list_bank_transactions;
+
 use super::models::{BankTx, Flow, Recurrence};
 
 const TREASURY_PLANNED_COLOR: &str = "#facc15";
@@ -17,6 +26,70 @@ const MONTHS_FR_FULL: &[&str] = &[
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
 ];
 
+// ============================================================
+//  Adaptateurs BDD → UI
+// ============================================================
+/// Horodatage en millisecondes, compatible wasm32 et natif.
+fn now_millis() -> usize {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() as usize
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as usize)
+            .unwrap_or(1)
+    }
+}
+
+fn flow_from_item(item: PrevisionFlowItem) -> Flow {
+    let recurrence = match item.recurrence.as_str() {
+        "ONCE" => Recurrence::Once,
+        "MONTHLY" => Recurrence::Monthly,
+        "QUARTERLY" => Recurrence::Quarterly,
+        "YEARLY" => Recurrence::Yearly,
+        _ => Recurrence::Monthly,
+    };
+    Flow {
+        id: item.id.as_u128() as usize,
+        label: item.label,
+        amount: item.amount_cents as f64 / 100.0,
+        color: item.color,
+        active: item.active,
+        recurrence,
+        start_year: item.start_year,
+        start_month: item.start_month as u32,
+        recurrence_day: item.recurrence_day as u32,
+        payment_day: item.payment_day as u32,
+        matched_txs: item
+            .matched_tx_ids
+            .iter()
+            .map(|u| u.as_u128() as usize)
+            .collect(),
+    }
+}
+
+fn recurrence_to_str(r: Recurrence) -> String {
+    match r {
+        Recurrence::Once => "ONCE".into(),
+        Recurrence::Monthly => "MONTHLY".into(),
+        Recurrence::Quarterly => "QUARTERLY".into(),
+        Recurrence::Yearly => "YEARLY".into(),
+    }
+}
+
+fn ui_id_to_uuid(items: &[PrevisionFlowItem], ui_id: usize) -> Option<Uuid> {
+    items
+        .iter()
+        .find(|it| it.id.as_u128() as usize == ui_id)
+        .map(|it| it.id)
+}
+
+// ============================================================
+//  Date minimaliste
+// ============================================================
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SimpleDate {
     pub year: i32,
@@ -208,7 +281,6 @@ enum ViewMode { Chart, Table }
 //  Cycle de vie des flux
 // ============================================================
 
-/// Date d'occurrence d'un flux (pour un ponctuel : sa date unique).
 fn flow_date(flow: &Flow) -> SimpleDate {
     SimpleDate {
         year: flow.start_year,
@@ -217,9 +289,6 @@ fn flow_date(flow: &Flow) -> SimpleDate {
     }
 }
 
-/// Le flux a-t-il un impact dans la période [p_start, p_end] ?
-/// - Ponctuel : sa date doit être dans l'intervalle.
-/// - Récurrent : doit avoir démarré avant ou pendant la période.
 fn flow_in_period(flow: &Flow, p_start: SimpleDate, p_end: SimpleDate) -> bool {
     match flow.recurrence {
         Recurrence::Once => {
@@ -233,7 +302,6 @@ fn flow_in_period(flow: &Flow, p_start: SimpleDate, p_end: SimpleDate) -> bool {
     }
 }
 
-/// Somme des montants rapprochés pour un flux.
 fn matched_amount(flow: &Flow, bank_txs: &[BankTx]) -> f64 {
     bank_txs.iter()
         .filter(|tx| flow.matched_txs.contains(&tx.id))
@@ -241,7 +309,6 @@ fn matched_amount(flow: &Flow, bank_txs: &[BankTx]) -> f64 {
         .sum()
 }
 
-/// Un flux est "archivé" (📌) seulement s'il est entièrement rapproché.
 fn is_archived(flow: &Flow, bank_txs: &[BankTx]) -> bool {
     match flow.recurrence {
         Recurrence::Once => {
@@ -252,7 +319,6 @@ fn is_archived(flow: &Flow, bank_txs: &[BankTx]) -> bool {
     }
 }
 
-/// Un flux est "en retard" s'il est ponctuel, dans le passé, et non rapproché.
 fn is_overdue(flow: &Flow, today: SimpleDate, bank_txs: &[BankTx]) -> bool {
     if !matches!(flow.recurrence, Recurrence::Once) { return false; }
     let d = flow_date(flow);
@@ -312,6 +378,9 @@ fn treasury_real_at(
     Some((baseline + delta).min(planned_at_d))
 }
 
+// ============================================================
+//  Composant principal
+// ============================================================
 #[component]
 pub fn ForecastWidget() -> Element {
     let mut real_today = use_signal(|| SimpleDate::fallback());
@@ -333,26 +402,47 @@ pub fn ForecastWidget() -> Element {
     let mut recon_flow_id = use_signal(|| None::<usize>);
     let mut maximized = use_signal(|| false);
 
-    let mut flows = use_signal(|| vec![
-        Flow { id: 1, label: "Loyers".into(),       amount:  8500.0, color: "#22c55e".into(), active: true,  recurrence: Recurrence::Monthly, start_year: 2026, start_month: 1, recurrence_day: 1,  payment_day: 5,  matched_txs: vec![10, 11, 12] },
-        Flow { id: 2, label: "Charges".into(),       amount:  -800.0, color: "#ef4444".into(), active: true,  recurrence: Recurrence::Monthly, start_year: 2026, start_month: 1, recurrence_day: 15, payment_day: 18, matched_txs: vec![20] },
-        Flow { id: 3, label: "Crédit".into(),        amount: -1200.0, color: "#f59e0b".into(), active: true,  recurrence: Recurrence::Monthly, start_year: 2026, start_month: 1, recurrence_day: 1,  payment_day: 1,  matched_txs: vec![] },
-        Flow { id: 5, label: "Notaire".into(),       amount: -3500.0, color: "#06b6d4".into(), active: true,  recurrence: Recurrence::Once,    start_year: 2026, start_month: 11, recurrence_day: 12, payment_day: 12, matched_txs: vec![] },
-        Flow { id: 4, label: "Taxe foncière".into(), amount: -2400.0, color: "#a855f7".into(), active: false, recurrence: Recurrence::Yearly,  start_year: 2026, start_month: 10, recurrence_day: 15, payment_day: 20, matched_txs: vec![] },
-    ]);
-    let next_id = use_signal(|| 6usize);
+    // === Chargement depuis la BDD ===
+    let mut reload = use_signal(|| 0u64);
+    let mut flows = use_signal(|| Vec::<Flow>::new());
+    let mut bdd_items = use_signal(|| Vec::<PrevisionFlowItem>::new());
 
-    let bank_txs = use_signal(|| vec![
-        BankTx { id: 10, date: "2026-07-05".into(), label: "VIREMENT LOYER DUPONT".into(),  amount:  800.0 },
-        BankTx { id: 11, date: "2026-08-05".into(), label: "VIREMENT LOYER MARTIN".into(),  amount:  950.0 },
-        BankTx { id: 12, date: "2026-09-05".into(), label: "VIREMENT LOYER PETIT".into(),   amount:  700.0 },
-        BankTx { id: 20, date: "2026-07-15".into(), label: "PRLV EDF".into(),                amount: -220.0 },
-        BankTx { id: 21, date: "2026-08-15".into(), label: "PRLV EDF".into(),                amount: -240.0 },
-        BankTx { id: 22, date: "2026-09-15".into(), label: "PRLV EAU".into(),                amount: -180.0 },
-        BankTx { id: 30, date: "2026-07-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
-        BankTx { id: 31, date: "2026-08-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
-        BankTx { id: 32, date: "2026-09-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
-    ]);
+    // Flux prévisionnels
+    let flows_resource = use_resource(move || {
+        let _ = reload();
+        async move {
+            let items = list_prevision_flows().await.unwrap_or_default();
+            let flows: Vec<Flow> = items.iter().cloned().map(flow_from_item).collect();
+            (flows, items)
+        }
+    });
+
+    use_effect(move || {
+        if let Some((local_flows, items)) = flows_resource.read().as_ref().cloned() {
+            flows.set(local_flows);
+            bdd_items.set(items);
+        }
+    });
+
+    // Transactions bancaires (rechargées en même temps)
+    let bank_txs_resource = use_resource(move || {
+        let _ = reload();
+        async move {
+            list_bank_transactions()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| BankTx {
+                    id: item.id.as_u128() as usize,
+                    date: item.booked_at.format("%Y-%m-%d").to_string(),
+                    label: item.label,
+                    amount: item.amount_cents as f64 / 100.0,
+                })
+                .collect::<Vec<_>>()
+        }
+    });
+
+    let bank_txs: Vec<BankTx> = (*bank_txs_resource.read()).clone().unwrap_or_default();
 
     let any_inactive = flows().iter().any(|f| !f.active);
     let cursor_is_today = cursor().month_abs() == real_today().month_abs();
@@ -361,7 +451,6 @@ pub fn ForecastWidget() -> Element {
 
     let is_max = maximized();
 
-    // Période courante (pour filtrer les pills)
     let filter_dates = build_dates(range(), cursor());
     let filter_start = filter_dates.first().copied().unwrap_or(cursor());
     let filter_end = filter_dates.last().copied().unwrap_or(cursor());
@@ -520,16 +609,17 @@ pub fn ForecastWidget() -> Element {
                 }
             }
 
-            // Ligne 3 : pills (uniquement les flux présents dans la période consultée)
+            // Ligne 3 : pills
             div { style: "display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0;",
-                for f in flows().iter().filter(|f| flow_in_period(f, filter_start, filter_end)) {
+                for f in flows().iter().filter(|f| flow_in_period(f, filter_start, filter_end)).cloned().collect::<Vec<_>>() {
                     {
                         let fid = f.id;
                         let color = f.color.clone();
                         let label = f.label.clone();
                         let is_active = f.active;
                         let dim = focus_treasury();
-                        let hint = if f.recurrence.is_recurring() {
+                        let is_recurring = f.recurrence.is_recurring();
+                        let hint = if is_recurring {
                             format!("Démarre {} {} • récur. {} • paie le {}",
                                 MONTHS_FR[(f.start_month - 1) as usize], f.start_year,
                                 f.recurrence.label(), f.payment_day)
@@ -551,15 +641,25 @@ pub fn ForecastWidget() -> Element {
                                 ),
                                 title: "{hint}",
                                 onclick: move |_| {
+                                    let new_active = flows.with(|v| {
+                                        !v.iter().find(|x| x.id == fid).map(|x| x.active).unwrap_or(true)
+                                    });
                                     flows.with_mut(|v| {
                                         if let Some(fl) = v.iter_mut().find(|x| x.id == fid) {
-                                            fl.active = !fl.active;
+                                            fl.active = new_active;
                                         }
                                     });
+                                    if let Some(uuid) = ui_id_to_uuid(&bdd_items(), fid) {
+                                        spawn(async move {
+                                            let _ = set_prevision_flow_active(uuid, new_active).await;
+                                            let r = reload();
+                                            reload.set(r + 1);
+                                        });
+                                    }
                                 },
                                 span { style: format!("width: 8px; height: 8px; border-radius: 50%; background: {};", if is_active { &color } else { "#475569" }) }
                                 "{label}"
-                                if !f.recurrence.is_recurring() {
+                                if !is_recurring {
                                     span { style: "font-size: 0.6rem; color: #64748b;", "•" }
                                 }
                             }
@@ -571,7 +671,15 @@ pub fn ForecastWidget() -> Element {
                         draggable: "false",
                         style: "background: transparent; border: 1px dashed #334155; color: #94a3b8; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; cursor: pointer;",
                         onclick: move |_| {
+                            let items_snapshot = bdd_items();
                             flows.with_mut(|v| for f in v.iter_mut() { f.active = true; });
+                            spawn(async move {
+                                for item in items_snapshot.iter() {
+                                    let _ = set_prevision_flow_active(item.id, true).await;
+                                }
+                                let r = reload();
+                                reload.set(r + 1);
+                            });
                         },
                         "Tout activer"
                     }
@@ -587,7 +695,7 @@ pub fn ForecastWidget() -> Element {
                     real_today: real_today(),
                     focus_treasury: focus_treasury(),
                     maximized: is_max,
-                    bank_txs: bank_txs(),
+                    bank_txs: bank_txs.clone(),
                 }
             } else {
                 ForecastTable {
@@ -595,7 +703,7 @@ pub fn ForecastWidget() -> Element {
                     range: range(),
                     cursor: cursor(),
                     real_today: real_today(),
-                    bank_txs: bank_txs(),
+                    bank_txs: bank_txs.clone(),
                     on_reconcile: move |id: usize| recon_flow_id.set(Some(id)),
                 }
             }
@@ -603,7 +711,8 @@ pub fn ForecastWidget() -> Element {
             if show_settings() {
                 ForecastSettingsModal {
                     flows,
-                    next_id,
+                    bdd_items,
+                    reload,
                     real_today: real_today(),
                     on_close: move |_| show_settings.set(false),
                 }
@@ -613,7 +722,9 @@ pub fn ForecastWidget() -> Element {
                 ReconciliationModal {
                     flow_id: fid,
                     flows,
-                    bank_txs: bank_txs(),
+                    bdd_items,
+                    reload,
+                    bank_txs: bank_txs.clone(),
                     on_close: move |_| recon_flow_id.set(None),
                 }
             }
@@ -1219,7 +1330,8 @@ fn ForecastTable(
 #[component]
 fn ForecastSettingsModal(
     flows: Signal<Vec<Flow>>,
-    next_id: Signal<usize>,
+    bdd_items: Signal<Vec<PrevisionFlowItem>>,
+    reload: Signal<u64>,
     real_today: SimpleDate,
     on_close: EventHandler<()>,
 ) -> Element {
@@ -1231,6 +1343,7 @@ fn ForecastSettingsModal(
     let mut start = use_signal(|| real_today.start_of_month());
     let mut rec_day = use_signal(|| "1".to_string());
     let mut pay_day = use_signal(|| "5".to_string());
+    let mut error_msg = use_signal(String::new);
 
     let mut reset = move || {
         editing_id.set(None);
@@ -1241,6 +1354,7 @@ fn ForecastSettingsModal(
         start.set(real_today.start_of_month());
         rec_day.set("1".to_string());
         pay_day.set("5".to_string());
+        error_msg.set(String::new());
     };
 
     let is_once = recurrence() == Recurrence::Once;
@@ -1259,6 +1373,11 @@ fn ForecastSettingsModal(
                         style: "background: transparent; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1;",
                         onclick: move |_| on_close.call(()),
                         "×"
+                    }
+                }
+                if !error_msg().is_empty() {
+                    div { style: "background: #450a0a; border: 1px solid #7f1d1d; color: #fecaca; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 12px;",
+                        "{error_msg()}"
                     }
                 }
                 h4 { style: "color: #38bdf8; margin: 8px 0; font-size: 0.9rem;", "Flux" }
@@ -1310,6 +1429,17 @@ fn ForecastSettingsModal(
                                         onclick: move |_| {
                                             flows.with_mut(|v| v.retain(|x| x.id != fid));
                                             if editing_id() == Some(fid) { reset(); }
+                                            if let Some(uuid) = ui_id_to_uuid(&bdd_items(), fid) {
+                                                spawn(async move {
+                                                    match delete_prevision_flow(uuid).await {
+                                                        Ok(_) => {
+                                                            let r = reload();
+                                                            reload.set(r + 1);
+                                                        }
+                                                        Err(e) => error_msg.set(e.to_string()),
+                                                    }
+                                                });
+                                            }
                                         },
                                         "Suppr"
                                     }
@@ -1318,7 +1448,9 @@ fn ForecastSettingsModal(
                         }
                     }
                     if flows().is_empty() {
-                        div { style: "color: #64748b; font-size: 0.8rem; padding: 8px; text-align: center;", "Aucun flux." }
+                        div { style: "color: #64748b; font-size: 0.8rem; padding: 8px; text-align: center;",
+                            "Aucun flux. Ajoutez-en un ci-dessous."
+                        }
                     }
                 }
                 h4 { style: "color: #38bdf8; margin: 8px 0; font-size: 0.9rem;",
@@ -1451,7 +1583,7 @@ fn ForecastSettingsModal(
                             style: "flex: 1; background: #38bdf8; color: #0f172a; border: none; padding: 8px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem;",
                             onclick: move |_| {
                                 let l = label().trim().to_string();
-                                if l.is_empty() { return; }
+                                if l.is_empty() { error_msg.set("Libellé requis".into()); return; }
                                 let a: f64 = amount().parse().unwrap_or(0.0);
                                 let c = color().clone();
                                 let r = recurrence();
@@ -1462,24 +1594,56 @@ fn ForecastSettingsModal(
                                 } else {
                                     rd
                                 };
+
+                                let draft = PrevisionFlowDraft {
+                                    label: l.clone(),
+                                    amount_cents: (a * 100.0).round() as i64,
+                                    color: c.clone(),
+                                    active: true,
+                                    recurrence: recurrence_to_str(r),
+                                    start_year: s.year,
+                                    start_month: s.month as i32,
+                                    recurrence_day: rd as i32,
+                                    payment_day: pd as i32,
+                                };
+
                                 if let Some(eid) = editing_id() {
                                     flows.with_mut(|v| {
                                         if let Some(f) = v.iter_mut().find(|x| x.id == eid) {
-                                            f.label = l; f.amount = a; f.color = c; f.recurrence = r;
-                                            f.start_year = s.year; f.start_month = s.month;
+                                            f.label = l; f.amount = a; f.color = c;
+                                            f.recurrence = r; f.start_year = s.year; f.start_month = s.month;
                                             f.recurrence_day = rd; f.payment_day = pd;
                                         }
                                     });
+                                    if let Some(uuid) = ui_id_to_uuid(&bdd_items(), eid) {
+                                        spawn(async move {
+                                            match update_prevision_flow(uuid, draft).await {
+                                                Ok(_) => {
+                                                    let n = reload();
+                                                    reload.set(n + 1);
+                                                }
+                                                Err(e) => error_msg.set(e.to_string()),
+                                            }
+                                        });
+                                    }
                                 } else {
-                                    let nid = next_id();
-                                    next_id.set(nid + 1);
+                                    let temp_id = now_millis() | 1;
                                     flows.with_mut(|v| v.push(Flow {
-                                        id: nid, label: l, amount: a, color: c,
+                                        id: temp_id, label: l, amount: a, color: c,
                                         active: true, recurrence: r,
                                         start_year: s.year, start_month: s.month,
                                         recurrence_day: rd, payment_day: pd,
                                         matched_txs: vec![],
                                     }));
+                                    spawn(async move {
+                                        match create_prevision_flow(draft).await {
+                                            Ok(_) => {
+                                                let n = reload();
+                                                reload.set(n + 1);
+                                            }
+                                            Err(e) => error_msg.set(e.to_string()),
+                                        }
+                                    });
                                 }
                                 reset();
                             },
@@ -1506,6 +1670,8 @@ fn ForecastSettingsModal(
 fn ReconciliationModal(
     flow_id: usize,
     flows: Signal<Vec<Flow>>,
+    bdd_items: Signal<Vec<PrevisionFlowItem>>,
+    reload: Signal<u64>,
     bank_txs: Vec<BankTx>,
     on_close: EventHandler<()>,
 ) -> Element {
@@ -1518,8 +1684,9 @@ fn ReconciliationModal(
     let initial_matches = flow.matched_txs.clone();
     let mut selected = use_signal(move || initial_matches.clone());
 
-    let compatible: Vec<BankTx> = bank_txs.into_iter()
+    let compatible: Vec<BankTx> = bank_txs.iter()
         .filter(|tx| (tx.amount >= 0.0) == (flow_amount >= 0.0))
+        .cloned()
         .collect();
 
     let matched_sum: f64 = compatible.iter()
@@ -1616,9 +1783,19 @@ fn ReconciliationModal(
                             let sel = selected();
                             flows.with_mut(|v| {
                                 if let Some(f) = v.iter_mut().find(|x| x.id == flow_id) {
-                                    f.matched_txs = sel;
+                                    f.matched_txs = sel.clone();
                                 }
                             });
+                            if let Some(uuid) = ui_id_to_uuid(&bdd_items(), flow_id) {
+                                let tx_uuids: Vec<Uuid> = sel.iter()
+                                    .map(|ui_id| Uuid::from_u128(*ui_id as u128))
+                                    .collect();
+                                spawn(async move {
+                                    let _ = set_prevision_flow_matches(uuid, tx_uuids).await;
+                                    let r = reload();
+                                    reload.set(r + 1);
+                                });
+                            }
                             on_close.call(());
                         },
                         "Valider le rapprochement"
