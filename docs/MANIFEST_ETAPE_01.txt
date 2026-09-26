@@ -1,0 +1,35 @@
+ETAPE 01 — LIVRABLE MULTI-SOCIETES + GARAGE SANS SAV
+
+Base : S01→S19
+Migration finale : 0029_multi_company_operating_profiles.sql
+
+Fichiers métier créés :
+D:\SCI\DEV\SCI-family-rust\src\business_profiles.rs
+D:\SCI\DEV\SCI-family-rust\migrations\0029_multi_company_operating_profiles.sql
+
+Fichiers métier modifiés :
+D:\SCI\DEV\SCI-family-rust\src\domain.rs
+D:\SCI\DEV\SCI-family-rust\src\sarl_activities.rs
+D:\SCI\DEV\SCI-family-rust\src\lib.rs
+
+Documentation créée/modifiée :
+D:\SCI\DEV\SCI-family-rust\ETAPE_01_MULTI_SOCIETES_GARAGE.md
+D:\SCI\DEV\SCI-family-rust\ETAPE_01_AUDIT_EXISTANT.md
+D:\SCI\DEV\SCI-family-rust\PLAN_5_ETAPES_GARAGE_SCI_SARL.md
+D:\SCI\DEV\SCI-family-rust\INSTALL_ETAPE_01_MULTI_SOCIETES_GARAGE.txt
+D:\SCI\DEV\SCI-family-rust\MANIFEST_ETAPE_01.txt
+D:\SCI\DEV\SCI-family-rust\PROJECT_STATE.md
+D:\SCI\DEV\SCI-family-rust\ROADMAP_STATE.md
+D:\SCI\DEV\SCI-family-rust\DATABASE_STATE.md
+D:\SCI\DEV\SCI-family-rust\ARCHITECTURE_STATE.md
+D:\SCI\DEV\SCI-family-rust\VERSION_STATE.md
+D:\SCI\DEV\SCI-family-rust\README.md
+
+Contrôles :
+- migration 0001→0029 présente ;
+- profil SARL_IS_GARAGE_SANS_SAV présent ;
+- profil SCI_LOCATIVE_IR présent ;
+- TVA COLLECTION/DEBIT contrainte ;
+- capacités véhicule/stock pièces/dépôt-vente sans atelier/SAV ;
+- aucun DROP TABLE / TRUNCATE / DELETE FROM dans 0029 ;
+- contrôle runtime non exécuté dans l'environnement de fabrication.

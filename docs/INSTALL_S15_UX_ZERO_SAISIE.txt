@@ -1,0 +1,6 @@
+S15 UX / ZERO-SAISIE
+
+1. Extraire le ZIP.
+2. Démarrer PostgreSQL avec docker compose up -d postgres.
+3. La migration 0027 est appliquée automatiquement au démarrage serveur.
+4. Vérifier avec scripts/verify-s15-s16-final.ps1 ou le gate S15 dédié.

@@ -1,0 +1,22 @@
+SCI FAMILY RUST — US-0306 + S04
+
+1. Décompresser le contenu dans D:\SCI\DEV en remplaçant les fichiers existants.
+2. Vérifier :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s03-0306-s04.ps1
+3. Migrer la base :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+4. Compiler/tests :
+   cargo test --lib --features server
+   cargo check --features server
+5. Scénario :
+   - sélectionner l'entité active ;
+   - ouvrir Référentiels & règles ;
+   - exécuter/inspecter un calculation run ;
+   - vérifier que l'explication restitue entrées, règle/version, source, formule, résultat ;
+   - ouvrir Moteurs communs ;
+   - créer un paiement et vérifier transaction normalisée + PaymentDetected ;
+   - importer un mouvement bancaire et vérifier BankImported ;
+   - créer un bail puis vérifier LeaseCreated ;
+   - vérifier que REAL / RECONCILED / THEORETICAL / FORECAST restent distincts.
+
+Statut de fabrication : READY FOR REVIEW. Build et PostgreSQL live à certifier sur le PC cible.

@@ -1,0 +1,8 @@
+{
+  "id": "VAT-CREDIT-2026-09",
+  "rule_version": "VAT-CASH-2026.1",
+  "date": "2026-09-25",
+  "inputs": {"collected_cents": 10000, "deductible_cents": 25000, "corrections_cents": 0, "advances_cents": 0},
+  "expected_output": {"vat_cents": -15000, "credit_cents": 15000},
+  "source": {"name": "Moteur TVA SCI", "reference": "FIXTURE-S10-002"}
+}

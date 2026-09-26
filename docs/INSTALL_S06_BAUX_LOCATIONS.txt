@@ -1,0 +1,8 @@
+S06 — BAUX / LOCATIONS
+1. Appliquer S05 puis la migration 0016.
+2. Lancer :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s06-leases.ps1
+3. Tester cargo test --lib --features server puis cargo check --features server.
+4. Scénario minimal : créer un bail, ajouter une clause, enregistrer un indice ICC/ILC,
+   calculer une révision, créer une réduction temporaire, enregistrer un dépôt et qualifier
+   le droit d'entrée.

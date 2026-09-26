@@ -1,0 +1,2 @@
+S13→S14 — contrôle final
+Exécuter scripts\verify-s13-s14-final.ps1 puis les tests Cargo sur le PC Windows.

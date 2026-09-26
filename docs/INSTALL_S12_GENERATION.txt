@@ -1,0 +1,7 @@
+S12 — COURRIERS / PDF / GENERATION
+
+Migration: 0022_document_generation.sql
+Couvre templates versionnés, courriers, emails, previews, génération de baux, contrôle préalable et PDF A4 avec pagination, statut, date, référence, filigrane et logo JPEG.
+
+Validation Windows:
+cd D:\SCI\DEV\SCI-family-rust;powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s12-generation.ps1

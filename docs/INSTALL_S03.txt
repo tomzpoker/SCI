@@ -1,0 +1,24 @@
+S03 — Référentiels + Rule Engine
+
+Base : D:\SCI\DEV\SCI-family-rust
+
+1. Décompresser le contenu de S03_FINAL_DELIVERY.zip en remplaçant les fichiers existants.
+2. Ouvrir PowerShell dans le projet.
+3. Vérifier le sprint :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-reference-rule-engine.ps1
+4. Appliquer les migrations avec le mécanisme S01-US-0102 déjà livré :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+5. Vérifier tests + compilation :
+   cargo test --lib --features server
+   cargo check --features server
+6. Vérification fonctionnelle minimale :
+   - démarrer PostgreSQL et l'application ;
+   - ouvrir « Référentiels & règles » ;
+   - constater les trois sources officielles initiales ;
+   - créer une RuleVersion brouillon ;
+   - la publier avec une source ;
+   - créer une nouvelle version future sans modifier la version publiée ;
+   - vérifier qu'un chevauchement publié sur le même scope est refusé ;
+   - utiliser create_calculation_run puis replay_calculation_run pour vérifier la conservation et la reproduction du calcul historique.
+
+Aucun reset de base, suppression de volume ou écrasement de .env n'est requis.

@@ -1,0 +1,13 @@
+SCI Family Rust — S04 US-0407 + S05
+
+S04 delta:
+- migrations/0013_idempotency.sql
+- src/idempotency.rs
+- server invoice/payment idempotency integration
+
+S05:
+- migrations/0014_workflow_validation_automation.sql
+- src/workflow.rs
+- workflow UI + validation inbox
+- scripts/verify-us0407-s05.ps1
+- docs/state S04/S05

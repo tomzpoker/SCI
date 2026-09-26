@@ -1,0 +1,20 @@
+SCI Family Rust — livraison US-0306 + S04
+
+S03:
+- US-0301 à US-0305 : livrées précédemment
+- US-0306 : calculs reproductibles
+
+S04:
+- US-0401 : transactions normalisées
+- US-0402 : séparation réel/rapproché/théorique/prévisionnel
+- US-0403 : calculs purs auditables
+- US-0404 : événements métier communs
+- US-0405 : frontière services métier / protection SQL IA
+
+Migrations:
+- 0011_reproducible_calculations.sql
+- 0012_common_data_engines.sql
+
+État:
+- COMPLETE côté source / READY FOR REVIEW
+- Version applicative : 0.4.0

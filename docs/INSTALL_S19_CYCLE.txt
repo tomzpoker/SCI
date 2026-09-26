@@ -1,0 +1,6 @@
+SCI Family Rust — S19 CYCLE MÉTIER
+
+1. Démarrer PostgreSQL : docker compose up -d postgres
+2. Migrer : powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+3. Tests cycle : $env:SCI_RUN_DB_TESTS='1';$env:SCI_TEST_AUTH='1';cargo test --test e2e_cycle --features server,test-auth
+4. Intégration : $env:SCI_RUN_DB_TESTS='1';$env:SCI_TEST_AUTH='1';cargo test --test integration --features server,test-auth

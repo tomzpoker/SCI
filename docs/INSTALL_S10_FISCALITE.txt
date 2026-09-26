@@ -1,0 +1,7 @@
+S10 — FISCALITE
+
+Migration: 0020_fiscality.sql
+Couvre TVA, TVA sur encaissement, acomptes TVA documentés, déclarations préparatoires, mapping sourcé, résultat fiscal, 2072 versionné, quote-parts temporelles, dossiers fiscaux, simulations et échéances qualifiables.
+
+Validation Windows:
+cd D:\SCI\DEV\SCI-family-rust;powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s10-fiscality.ps1

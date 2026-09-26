@@ -1,0 +1,15 @@
+SCI FAMILY RUST — S04
+
+1. Décompresser dans D:\SCI\DEV en remplaçant les fichiers existants.
+2. Vérifier le socle et les deux stories :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-s04.ps1
+3. Migrer :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+4. Tester/compiler :
+   cargo test --lib --features server
+   cargo check --features server
+5. Tester US-0306 : expliquer un calculation run et vérifier entrées, règles/version, source, formule, résultat, arrondi.
+6. Tester S04 : créer un paiement, importer une banque, créer un bail, vérifier transactions normalisées et événements standard.
+7. Vérifier l'écran Moteurs communs.
+
+État de fabrication : READY FOR REVIEW. Le build Windows/PostgreSQL réel doit être certifié sur le PC cible.

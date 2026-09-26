@@ -1,0 +1,8 @@
+S05 installation
+1. Décompresser le livrable sur D:\SCI\DEV en remplaçant les fichiers indiqués.
+2. Vérifier : scripts\verify-us0407-s05.ps1
+3. Appliquer migrations via scripts\migrate.ps1.
+4. Tester : cargo test --lib --features server puis cargo check --features server.
+5. Scénario : lancer ADMIN_ACTION deux fois avec la même clé ; vérifier une seule workflow_run.
+6. Refuser puis approuver une validation ; vérifier le changement d'état.
+7. Enregistrer une post-condition identique puis différente ; vérifier MATCHED / MISMATCH.

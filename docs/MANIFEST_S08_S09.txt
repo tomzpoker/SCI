@@ -1,0 +1,32 @@
+SCI FAMILY RUST — MANIFEST S08 + S09
+
+S08
+migrations/0018_banking_reconciliation.sql
+src/banking.rs
+scripts/verify-s08-banking.ps1
+INSTALL_S08_BANQUE_RAPPROCHEMENT.txt
+S08.md
+S08_FINAL.md
+S08_US-0801..0808.md + READMEs
+versions/S08.md + versions/S08_US-0801..0808.md
+
+S09
+migrations/0019_treasury_forecast.sql
+src/treasury.rs
+scripts/verify-s09-treasury.ps1
+INSTALL_S09_TRESORERIE.txt
+S09.md
+S09_FINAL.md
+S09_US-0901..0907.md + READMEs
+versions/S09.md + versions/S09_US-0901..0907.md
+
+Intégration
+src/ui.rs
+src/lib.rs
+src/documents/workflow.rs
+PROJECT_STATE.md
+ROADMAP_STATE.md
+DATABASE_STATE.md
+ARCHITECTURE_STATE.md
+VERSION_STATE.md
+scripts/verify-s08-s09-final.ps1

@@ -1,0 +1,21 @@
+ÉTAPE 01 — installation
+
+1. Remplacer le projet par cette livraison.
+2. Depuis PowerShell :
+   cd D:\SCI\DEV\SCI-family-rust
+3. Migrer :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+4. Vérifier :
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
+5. Lancer :
+   dx serve --web
+
+Dans Entités :
+- créer la SCI : SCI / IR ;
+- créer la SARL : SARL / IS ;
+- choisir TVA Encaissement ou TVA Débits pour chaque société.
+
+Dans Activités SARL :
+- sélectionner la SARL ;
+- activer le profil « SARL à l’IS — Garage automobile sans SAV / atelier » ;
+- choisir l’activité « Garage automobile — vente / stock / dépôt-vente sans SAV ».
