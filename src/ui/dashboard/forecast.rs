@@ -5,6 +5,7 @@ const TREASURY_PLANNED_COLOR: &str = "#facc15";
 const TREASURY_POS_COLOR: &str = "#22c55e";
 const TREASURY_NEG_COLOR: &str = "#ef4444";
 const TODAY_MARKER_COLOR: &str = "#a78bfa";
+const OVERDUE_COLOR: &str = "#f97316";
 
 const MONTHS_FR: &[&str] = &[
     "janv.", "févr.", "mars", "avr.", "mai", "juin",
@@ -16,14 +17,6 @@ const MONTHS_FR_FULL: &[&str] = &[
     "juillet", "août", "septembre", "octobre", "novembre", "décembre",
 ];
 
-fn real_drift_for(date: SimpleDate) -> f64 {
-    let h = (date.month_abs().wrapping_mul(37).rem_euclid(11)) as f64;
-    (h / 100.0) - 0.05
-}
-
-// ============================================================
-//  Date minimaliste
-// ============================================================
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SimpleDate {
     pub year: i32,
@@ -60,9 +53,7 @@ impl SimpleDate {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn today() -> Self {
-        Self::fallback()
-    }
+    pub fn today() -> Self { Self::fallback() }
 
     pub fn start_of_month(&self) -> Self {
         Self { year: self.year, month: self.month, day: 1 }
@@ -112,9 +103,35 @@ fn date_label_short(d: SimpleDate) -> String {
     format!("{} {}", MONTHS_FR[(d.month - 1) as usize], d.year % 100)
 }
 
-// ============================================================
-//  Plage temporelle
-// ============================================================
+fn parse_iso_date(s: &str) -> Option<SimpleDate> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() < 3 { return None; }
+    let year = parts[0].parse::<i32>().ok()?;
+    let month = parts[1].parse::<u32>().ok()?;
+    let day = parts[2].parse::<u32>().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) { return None; }
+    Some(SimpleDate { year, month, day })
+}
+
+#[derive(Clone)]
+enum EventDate {
+    Recurring(u32),
+    Once(i32, u32, u32),
+}
+
+#[derive(Clone)]
+struct DayEvent {
+    date: EventDate,
+    color: String,
+}
+
+fn is_event_at(ev: &DayEvent, d: SimpleDate) -> bool {
+    match ev.date {
+        EventDate::Recurring(day) => d.day == day,
+        EventDate::Once(y, m, dd) => d.year == y && d.month == m && d.day == dd,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum TimeRange { Month, Quarter, Half, Year, ThreeYears }
 
@@ -130,7 +147,7 @@ impl TimeRange {
     }
     fn tooltip(self) -> &'static str {
         match self {
-            TimeRange::Month => "Mois en cours, jour par jour",
+            TimeRange::Month => "Mois calendaire complet",
             TimeRange::Quarter => "3 mois, jour par jour",
             TimeRange::Half => "6 mois (pas de 2 jours)",
             TimeRange::Year => "12 mois (pas de 5 jours)",
@@ -164,6 +181,21 @@ impl TimeRange {
             TimeRange::ThreeYears => 12,
         }
     }
+    fn n_months(self) -> usize {
+        match self {
+            TimeRange::Month => 1,
+            TimeRange::Quarter => 3,
+            TimeRange::Half => 6,
+            TimeRange::Year => 12,
+            TimeRange::ThreeYears => 12,
+        }
+    }
+    fn month_step(self) -> i32 {
+        match self {
+            TimeRange::ThreeYears => 3,
+            _ => 1,
+        }
+    }
     fn all() -> [TimeRange; 5] {
         [TimeRange::Month, TimeRange::Quarter, TimeRange::Half, TimeRange::Year, TimeRange::ThreeYears]
     }
@@ -173,39 +205,117 @@ impl TimeRange {
 enum ViewMode { Chart, Table }
 
 // ============================================================
-//  Cumul d'un flux à une date
+//  Cycle de vie des flux
 // ============================================================
+
+/// Date d'occurrence d'un flux (pour un ponctuel : sa date unique).
+fn flow_date(flow: &Flow) -> SimpleDate {
+    SimpleDate {
+        year: flow.start_year,
+        month: flow.start_month,
+        day: flow.recurrence_day.clamp(1, 31),
+    }
+}
+
+/// Le flux a-t-il un impact dans la période [p_start, p_end] ?
+/// - Ponctuel : sa date doit être dans l'intervalle.
+/// - Récurrent : doit avoir démarré avant ou pendant la période.
+fn flow_in_period(flow: &Flow, p_start: SimpleDate, p_end: SimpleDate) -> bool {
+    match flow.recurrence {
+        Recurrence::Once => {
+            let d = flow_date(flow);
+            d.as_tuple() >= p_start.as_tuple() && d.as_tuple() <= p_end.as_tuple()
+        }
+        _ => {
+            let start_abs = flow.start_year * 12 + (flow.start_month as i32 - 1);
+            start_abs <= p_end.month_abs()
+        }
+    }
+}
+
+/// Somme des montants rapprochés pour un flux.
+fn matched_amount(flow: &Flow, bank_txs: &[BankTx]) -> f64 {
+    bank_txs.iter()
+        .filter(|tx| flow.matched_txs.contains(&tx.id))
+        .map(|tx| tx.amount)
+        .sum()
+}
+
+/// Un flux est "archivé" (📌) seulement s'il est entièrement rapproché.
+/// Règle : le total rapproché couvre le montant attendu.
+/// - Ponctuel : un seul impact attendu = flow.amount
+/// - Récurrent : on ne peut pas vérifier "tout" sans notion d'arrêt explicite
+///   → considéré comme jamais archivé (reste actif).
+fn is_archived(flow: &Flow, bank_txs: &[BankTx]) -> bool {
+    match flow.recurrence {
+        Recurrence::Once => {
+            let m = matched_amount(flow, bank_txs);
+            (m - flow.amount).abs() < 0.01
+        }
+        _ => false,
+    }
+}
+
+/// Un flux est "en retard" s'il est ponctuel, dans le passé, et non rapproché.
+fn is_overdue(flow: &Flow, today: SimpleDate, bank_txs: &[BankTx]) -> bool {
+    if !matches!(flow.recurrence, Recurrence::Once) { return false; }
+    let d = flow_date(flow);
+    d.as_tuple() < today.as_tuple() && !is_archived(flow, bank_txs)
+}
+
 fn flow_cumulative_at(flow: &Flow, target: SimpleDate) -> f64 {
     if matches!(flow.recurrence, Recurrence::Once) {
-        let start = SimpleDate {
-            year: flow.start_year,
-            month: flow.start_month,
-            day: flow.recurrence_day.clamp(1, 31),
-        };
+        let start = flow_date(flow);
         return if target.as_tuple() >= start.as_tuple() { flow.amount } else { 0.0 };
     }
-
     let start_abs = flow.start_year * 12 + (flow.start_month as i32 - 1);
     let target_abs = target.month_abs();
     if target_abs < start_abs { return 0.0; }
-
     let period = flow.recurrence.months().max(1);
     let diff = target_abs - start_abs;
     let k = diff / period;
     let mut occurrences = k + 1;
-
-    // Si la dernière occurrence tombe dans le mois cible mais après le jour cible
     let last_occ_month_abs = start_abs + k * period;
     if last_occ_month_abs == target_abs && target.day < flow.recurrence_day {
         occurrences -= 1;
     }
-
     (flow.amount * occurrences.max(0) as f64).max(f64::MIN)
 }
 
-// ============================================================
-//  Composant principal
-// ============================================================
+fn build_dates(range: TimeRange, cursor: SimpleDate) -> Vec<SimpleDate> {
+    if range == TimeRange::Month {
+        let dim = days_in_month(cursor.year, cursor.month);
+        (0..dim as i64).map(|i| cursor.add_days(i)).collect()
+    } else {
+        let total = range.total_days();
+        let step = range.day_step();
+        (0..total).step_by(step as usize).map(|i| cursor.add_days(i)).collect()
+    }
+}
+
+fn treasury_real_at(
+    d: SimpleDate,
+    cursor: SimpleDate,
+    today: SimpleDate,
+    baseline: f64,
+    parsed_bank: &[(SimpleDate, f64)],
+    planned_at_d: f64,
+) -> Option<f64> {
+    let is_future = d.month_abs() > today.month_abs()
+        || (d.month_abs() == today.month_abs() && d.day > today.day);
+    if is_future { return None; }
+    let cursor_key = cursor.as_tuple();
+    let upper = (d.year, d.month, days_in_month(d.year, d.month));
+    let delta: f64 = parsed_bank.iter()
+        .filter(|(td, _)| {
+            let tk = td.as_tuple();
+            tk > cursor_key && tk <= upper
+        })
+        .map(|(_, amt)| *amt)
+        .sum();
+    Some((baseline + delta).min(planned_at_d))
+}
+
 #[component]
 pub fn ForecastWidget() -> Element {
     let mut real_today = use_signal(|| SimpleDate::fallback());
@@ -225,6 +335,7 @@ pub fn ForecastWidget() -> Element {
     let mut show_settings = use_signal(|| false);
     let mut focus_treasury = use_signal(|| true);
     let mut recon_flow_id = use_signal(|| None::<usize>);
+    let mut maximized = use_signal(|| false);
 
     let mut flows = use_signal(|| vec![
         Flow { id: 1, label: "Loyers".into(),       amount:  8500.0, color: "#22c55e".into(), active: true,  recurrence: Recurrence::Monthly, start_year: 2026, start_month: 1, recurrence_day: 1,  payment_day: 5,  matched_txs: vec![10, 11, 12] },
@@ -252,20 +363,43 @@ pub fn ForecastWidget() -> Element {
     let year_min = real_today().year - 5;
     let year_max = real_today().year + 10;
 
+    let is_max = maximized();
+    let container_style = if is_max {
+        "position: fixed; inset: 16px; z-index: 9999; background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 10px; overflow: hidden;"
+    } else {
+        "display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 100%;"
+    };
+
     rsx! {
-        div { style: "display: flex; flex-direction: column; gap: 10px;",
+        div {
+            style: "{container_style}",
 
             // Ligne 1
-            div { style: "display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;",
+            div { style: "display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0;",
                 div { style: "display: flex; align-items: center; gap: 6px;",
                     button {
+                        draggable: "false",
                         style: "background: transparent; border: 1px solid #334155; color: #94a3b8; border-radius: 6px; cursor: pointer; padding: 0; width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.15rem; line-height: 1;",
                         title: "Configurer les flux",
                         onclick: move |_| show_settings.set(true),
                         "⚙"
                     }
+                    button {
+                        draggable: "false",
+                        style: "background: transparent; border: 1px solid #334155; color: #94a3b8; border-radius: 6px; cursor: pointer; padding: 0; width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem; line-height: 1;",
+                        title: if is_max { "Réduire" } else { "Plein écran" },
+                        onmousedown: move |e| e.stop_propagation(),
+                        onpointerdown: move |e| e.stop_propagation(),
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            let next = !maximized();
+                            maximized.set(next);
+                        },
+                        if is_max { "⤡" } else { "⛶" }
+                    }
                     div { style: "display: inline-flex; background: #0f172a; border-radius: 6px; padding: 2px; border: 1px solid #334155;",
                         button {
+                            draggable: "false",
                             style: if view_mode() == ViewMode::Chart {
                                 "background: #38bdf8; color: #0f172a; border: none; padding: 4px 12px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-weight: 600;"
                             } else {
@@ -275,6 +409,7 @@ pub fn ForecastWidget() -> Element {
                             "Graph"
                         }
                         button {
+                            draggable: "false",
                             style: if view_mode() == ViewMode::Table {
                                 "background: #38bdf8; color: #0f172a; border: none; padding: 4px 12px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-weight: 600;"
                             } else {
@@ -287,6 +422,7 @@ pub fn ForecastWidget() -> Element {
                 }
                 if view_mode() == ViewMode::Chart {
                     button {
+                        draggable: "false",
                         style: if focus_treasury() {
                             "display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 1px solid #334155; color: #94a3b8; padding: 4px 10px; border-radius: 6px; font-size: 0.72rem; cursor: pointer;"
                         } else {
@@ -306,9 +442,10 @@ pub fn ForecastWidget() -> Element {
             }
 
             // Ligne 2
-            div { style: "display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;",
+            div { style: "display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; flex-shrink: 0;",
                 div { style: "display: flex; align-items: center; gap: 4px;",
                     button {
+                        draggable: "false",
                         style: "background: #0f172a; border: 1px solid #334155; color: #94a3b8; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; line-height: 1;",
                         onclick: move |_| {
                             let step = range().cursor_step();
@@ -347,6 +484,7 @@ pub fn ForecastWidget() -> Element {
                         }
                     }
                     button {
+                        draggable: "false",
                         style: "background: #0f172a; border: 1px solid #334155; color: #94a3b8; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; line-height: 1;",
                         onclick: move |_| {
                             let step = range().cursor_step();
@@ -356,6 +494,7 @@ pub fn ForecastWidget() -> Element {
                     }
                     if !cursor_is_today {
                         button {
+                            draggable: "false",
                             style: "background: transparent; border: 1px solid #4c1d95; color: #a78bfa; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.7rem; font-weight: 500; margin-left: 4px;",
                             onclick: move |_| cursor.set(real_today().start_of_month()),
                             "Aujourd'hui"
@@ -365,6 +504,7 @@ pub fn ForecastWidget() -> Element {
                 div { style: "display: inline-flex; background: #0f172a; border-radius: 6px; padding: 2px; border: 1px solid #334155;",
                     for r in TimeRange::all() {
                         button {
+                            draggable: "false",
                             style: if range() == r {
                                 "background: #38bdf8; color: #0f172a; border: none; padding: 4px 14px; border-radius: 4px; font-size: 0.72rem; cursor: pointer; font-weight: 600;"
                             } else {
@@ -378,8 +518,8 @@ pub fn ForecastWidget() -> Element {
                 }
             }
 
-            // Ligne 3
-            div { style: "display: flex; flex-wrap: wrap; gap: 6px;",
+            // Ligne 3 : pills
+            div { style: "display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0;",
                 for f in flows().iter() {
                     {
                         let fid = f.id;
@@ -392,12 +532,14 @@ pub fn ForecastWidget() -> Element {
                                 MONTHS_FR[(f.start_month - 1) as usize], f.start_year,
                                 f.recurrence.label(), f.payment_day)
                         } else {
-                            format!("Ponctuel le {} {}",
+                            format!("Ponctuel le {} {} {}",
                                 f.recurrence_day,
-                                MONTHS_FR[(f.start_month - 1) as usize])
+                                MONTHS_FR[(f.start_month - 1) as usize],
+                                f.start_year)
                         };
                         rsx! {
                             button {
+                                draggable: "false",
                                 style: format!(
                                     "display: inline-flex; align-items: center; gap: 5px; background: {}; border: 1px solid {}; color: {}; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; cursor: pointer; transition: all 0.15s; opacity: {};",
                                     if is_active { "#1e293b" } else { "#0f172a" },
@@ -413,9 +555,7 @@ pub fn ForecastWidget() -> Element {
                                         }
                                     });
                                 },
-                                span {
-                                    style: format!("width: 8px; height: 8px; border-radius: 50%; background: {};", if is_active { &color } else { "#475569" }),
-                                }
+                                span { style: format!("width: 8px; height: 8px; border-radius: 50%; background: {};", if is_active { &color } else { "#475569" }) }
                                 "{label}"
                                 if !f.recurrence.is_recurring() {
                                     span { style: "font-size: 0.6rem; color: #64748b;", "•" }
@@ -426,6 +566,7 @@ pub fn ForecastWidget() -> Element {
                 }
                 if any_inactive {
                     button {
+                        draggable: "false",
                         style: "background: transparent; border: 1px dashed #334155; color: #94a3b8; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; cursor: pointer;",
                         onclick: move |_| {
                             flows.with_mut(|v| for f in v.iter_mut() { f.active = true; });
@@ -443,6 +584,8 @@ pub fn ForecastWidget() -> Element {
                     cursor: cursor(),
                     real_today: real_today(),
                     focus_treasury: focus_treasury(),
+                    maximized: is_max,
+                    bank_txs: bank_txs(),
                 }
             } else {
                 ForecastTable {
@@ -477,7 +620,7 @@ pub fn ForecastWidget() -> Element {
 }
 
 // ============================================================
-//  Graph — timeline jour par jour
+//  Graph
 // ============================================================
 #[component]
 fn ForecastChart(
@@ -486,23 +629,27 @@ fn ForecastChart(
     cursor: SimpleDate,
     real_today: SimpleDate,
     focus_treasury: bool,
+    maximized: bool,
+    bank_txs: Vec<BankTx>,
 ) -> Element {
-    let active: Vec<&Flow> = flows.iter().filter(|f| f.active).collect();
-
-    let total_days = range.total_days();
-    let day_step = range.day_step();
-    let dates: Vec<SimpleDate> = (0..total_days)
-        .step_by(day_step as usize)
-        .map(|i| cursor.add_days(i))
-        .collect();
+    let dates = build_dates(range, cursor);
+    let p_start = dates.first().copied().unwrap_or(cursor);
+    let p_end = dates.last().copied().unwrap_or(cursor);
     let n = dates.len();
     let today_abs = real_today.month_abs();
+    let is_month_view = range == TimeRange::Month;
 
-    let width = 520.0_f64;
-    let height = 280.0_f64;
+    // === Filtre : ne garder que les flux dont la fenêtre intersecte la période ===
+    let active_all: Vec<&Flow> = flows.iter().filter(|f| f.active).collect();
+    let active: Vec<&Flow> = active_all.into_iter()
+        .filter(|f| flow_in_period(f, p_start, p_end))
+        .collect();
+
+    let width = 1000.0_f64;
+    let height = 340.0_f64;
     let padding_x = 52.0_f64;
-    let padding_top = 52.0_f64;
-    let padding_bottom = 82.0_f64;
+    let padding_top = 46.0_f64;
+    let padding_bottom = 80.0_f64;
     let plot_bottom = height - padding_bottom;
 
     let x_of = move |i: usize| {
@@ -510,26 +657,33 @@ fn ForecastChart(
         else { padding_x + (i as f64 / (n - 1) as f64) * (width - 2.0 * padding_x) }
     };
 
-    // Événements (jours distincts)
-    let mut event_days: Vec<(u32, String)> = Vec::new();
+    let mut day_events: Vec<DayEvent> = Vec::new();
     for f in &active {
         let rec = f.recurrence_day.clamp(1, 31);
-        if !event_days.iter().any(|(d, _)| *d == rec) {
-            event_days.push((rec, f.color.clone()));
+        let ev = if f.recurrence.is_recurring() {
+            EventDate::Recurring(rec)
+        } else {
+            EventDate::Once(f.start_year, f.start_month, rec)
+        };
+        let already = day_events.iter().any(|e| match (&e.date, &ev) {
+            (EventDate::Recurring(a), EventDate::Recurring(b)) => a == b,
+            (EventDate::Once(ay, am, ad), EventDate::Once(by, bm, bd)) => {
+                ay == by && am == bm && ad == bd
+            }
+            _ => false,
+        });
+        if !already {
+            day_events.push(DayEvent { date: ev, color: f.color.clone() });
         }
         if f.recurrence.is_recurring() {
             let pay = f.payment_day.clamp(1, 31);
-            if pay != rec && !event_days.iter().any(|(d, _)| *d == pay) {
-                event_days.push((pay, f.color.clone()));
+            if pay != rec
+                && !day_events.iter().any(|e| matches!(e.date, EventDate::Recurring(d) if d == pay))
+            {
+                day_events.push(DayEvent { date: EventDate::Recurring(pay), color: f.color.clone() });
             }
         }
     }
-    event_days.sort_by_key(|(d, _)| *d);
-
-    let is_event_day = |day: u32| event_days.iter().any(|(d, _)| *d == day);
-    let color_for_day = |day: u32| -> String {
-        event_days.iter().find(|(d, _)| *d == day).map(|(_, c)| c.clone()).unwrap_or("#64748b".into())
-    };
 
     let flow_series: Vec<Vec<f64>> = active.iter().map(|f| {
         dates.iter().map(|d| flow_cumulative_at(f, *d)).collect()
@@ -539,10 +693,13 @@ fn ForecastChart(
         active.iter().map(|f| flow_cumulative_at(f, dates[i])).sum()
     }).collect();
 
-    let treasury_real: Vec<Option<f64>> = dates.iter().enumerate().map(|(i, d)| {
-        if d.month_abs() <= today_abs {
-            Some(treasury_planned[i] * (1.0 + real_drift_for(*d)))
-        } else { None }
+    let parsed_bank: Vec<(SimpleDate, f64)> = bank_txs.iter()
+        .filter_map(|tx| parse_iso_date(&tx.date).map(|d| (d, tx.amount)))
+        .collect();
+    let baseline_real = treasury_planned.first().copied().unwrap_or(0.0);
+
+    let treasury_real: Vec<Option<f64>> = (0..n).map(|i| {
+        treasury_real_at(dates[i], cursor, real_today, baseline_real, &parsed_bank, treasury_planned[i])
     }).collect();
 
     let mut all_values: Vec<f64> = Vec::new();
@@ -559,7 +716,6 @@ fn ForecastChart(
     let y_of = move |v: f64| plot_bottom - ((v - min_val) / range_v) * (plot_bottom - padding_top);
     let y_zero = y_of(0.0);
 
-    // Segments trésorerie réelle (couleur selon signe)
     let real_pts: Vec<Option<(f64, f64)>> = treasury_real.iter().enumerate()
         .map(|(i, v)| v.map(|val| (x_of(i), y_of(val)))).collect();
     let mut real_segments: Vec<(f64, f64, f64, f64, &'static str)> = Vec::new();
@@ -590,25 +746,54 @@ fn ForecastChart(
     let treasury_planned_path = path_of(&treasury_planned);
 
     let today_idx: Option<usize> = dates.iter().position(|d| d.as_tuple() == real_today.as_tuple());
+    let today_marker_y: Option<f64> = today_idx.map(|ti| {
+        let v = treasury_real[ti].unwrap_or(treasury_planned[ti]);
+        y_of(v)
+    });
+
+    let mut month_marks: Vec<(usize, String, bool)> = Vec::new();
+    let mut last_month_seen: Option<(i32, u32)> = None;
+    for (i, d) in dates.iter().enumerate() {
+        let key = (d.year, d.month);
+        if last_month_seen != Some(key) {
+            let is_current = d.month_abs() == today_abs;
+            let lbl = date_label_short(*d);
+            month_marks.push((i, lbl, is_current));
+            last_month_seen = Some(key);
+        }
+    }
 
     let cursor_date = dates[0];
     let cursor_planned = treasury_planned[0];
     let cursor_real = treasury_real[0];
     let cursor_flow_values: Vec<f64> = flow_series.iter().map(|s| s[0]).collect();
 
-    // Filtre des points à étiqueter (mois = 1er du mois ; jour = événement)
-    let show_day_labels = day_step == 1;
+    let chart_box_style = if maximized {
+        "border-radius: 8px; overflow: hidden; width: 100%; flex: 1; min-height: 0;"
+    } else {
+        "border-radius: 8px; overflow: hidden; width: 100%; aspect-ratio: 1000 / 340;"
+    };
+
+    let outer_style = if maximized {
+        "display: flex; flex-direction: column; gap: 10px; width: 100%; flex: 1; min-height: 0;"
+    } else {
+        "display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0;"
+    };
 
     rsx! {
-        div { style: "display: flex; flex-direction: column; gap: 10px;",
-            div { class: "dash-chart-container",
+        div { style: "{outer_style}",
+            div {
+                class: "dash-chart-container",
+                style: "{chart_box_style}",
                 if active.is_empty() {
                     div { style: "display: flex; align-items: center; justify-content: center; height: 200px; color: #64748b; font-size: 0.85rem;",
-                        "Aucun flux actif."
+                        "Aucun flux actif dans cette période."
                     }
                 } else {
-                    svg { view_box: "0 0 {width} {height}",
-                        // Grille
+                    svg {
+                        view_box: "0 0 {width} {height}",
+                        preserve_aspect_ratio: "xMidYMid meet",
+                        style: "width: 100%; height: 100%; display: block;",
                         for i in 0..5 {
                             {
                                 let y = padding_top + (i as f64 / 4.0) * (plot_bottom - padding_top);
@@ -619,7 +804,6 @@ fn ForecastChart(
                         line { x1: "{padding_x}", y1: "{padding_top}", x2: "{padding_x}", y2: "{plot_bottom}", stroke: "#334155", stroke_width: "1" }
                         line { x1: "{padding_x}", y1: "{plot_bottom}", x2: "{width - padding_x}", y2: "{plot_bottom}", stroke: "#334155", stroke_width: "1" }
 
-                        // Ligne verticale "aujourd'hui"
                         if let Some(ti) = today_idx {
                             line {
                                 x1: "{x_of(ti)}", y1: "{padding_top}",
@@ -631,19 +815,22 @@ fn ForecastChart(
                             }
                         }
 
-                        // Courbes individuelles (lignes pures, pas de cercles)
                         if !focus_treasury {
                             for (fi, flow) in active.iter().enumerate() {
                                 {
                                     let path_d = path_of(&flow_series[fi]);
                                     let color = flow.color.clone();
+                                    let archived = is_archived(flow, &bank_txs);
+                                    let opacity = if archived { "0.4" } else { "0.85" };
+                                    let dash = if archived { "4,3" } else { "none" };
                                     rsx! {
                                         path {
                                             d: "{path_d}",
                                             fill: "none",
                                             stroke: "{color}",
                                             stroke_width: "1.5",
-                                            opacity: "0.85",
+                                            opacity: "{opacity}",
+                                            stroke_dasharray: "{dash}",
                                             stroke_linejoin: "round"
                                         }
                                     }
@@ -651,7 +838,6 @@ fn ForecastChart(
                             }
                         }
 
-                        // Trésorerie prévue (jaune)
                         path {
                             d: "{treasury_planned_path}",
                             fill: "none",
@@ -661,7 +847,6 @@ fn ForecastChart(
                             stroke_linecap: "round"
                         }
 
-                        // Trésorerie réelle (segments colorés)
                         for (x1, y1, x2, y2, color) in real_segments.iter() {
                             line {
                                 x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
@@ -669,54 +854,41 @@ fn ForecastChart(
                             }
                         }
 
-                        // Marqueur "aujourd'hui"
-                        if let Some(ti) = today_idx {
+                        if let (Some(ti), Some(y)) = (today_idx, today_marker_y) {
                             circle {
-                                cx: "{x_of(ti)}", cy: "{y_of(treasury_planned[ti])}",
-                                r: "6", fill: "{TODAY_MARKER_COLOR}", opacity: "0.2"
+                                cx: "{x_of(ti)}", cy: "{y}",
+                                r: "4.5", fill: "{TODAY_MARKER_COLOR}", opacity: "0.25"
                             }
                             circle {
-                                cx: "{x_of(ti)}", cy: "{y_of(treasury_planned[ti])}",
-                                r: "3.5", fill: "{TODAY_MARKER_COLOR}",
-                                stroke: "#ffffff", stroke_width: "1.5"
+                                cx: "{x_of(ti)}", cy: "{y}",
+                                r: "2.5", fill: "{TODAY_MARKER_COLOR}",
+                                stroke: "#ffffff", stroke_width: "1"
                             }
                         }
 
-                        // Jalons de jour (petits ticks sous l'axe) et numéros d'événement
-                        {
-                            let ticks: Vec<_> = dates.iter().enumerate().filter_map(|(i, d)| {
-                                let is_evt = is_event_day(d.day);
-                                // On affiche le tick pour chaque jour si step==1, sinon uniquement les événements
-                                if day_step == 1 || is_evt {
-                                    Some((i, d.day, is_evt))
-                                } else { None }
-                            }).collect();
-                            rsx! {
-                                for (i, day, is_evt) in ticks {
-                                    {
-                                        let x = x_of(i);
-                                        let tick_len = if is_evt { 6.0 } else { 3.0 };
-                                        let opacity = if is_evt { "1" } else { "0.5" };
-                                        let col = if is_evt { color_for_day(day) } else { "#334155".to_string() };
-                                        rsx! {
-                                            line {
-                                                x1: "{x}", y1: "{plot_bottom + 1.0}",
-                                                x2: "{x}", y2: "{plot_bottom + 1.0 + tick_len}",
-                                                stroke: "{col}",
-                                                stroke_width: "1.2",
-                                                opacity: "{opacity}"
-                                            }
-                                        }
-                                    }
-                                }
-                                // Numéros du jour uniquement pour les événements (si step=1)
-                                if show_day_labels {
-                                    for (i, d) in dates.iter().enumerate() {
-                                        if is_event_day(d.day) {
-                                            {
-                                                let x = x_of(i);
-                                                let col = color_for_day(d.day);
-                                                rsx! {
+                        if is_month_view {
+                            {
+                                let ticks: Vec<_> = dates.iter().enumerate().map(|(i, d)| {
+                                    let matched = day_events.iter().find(|ev| is_event_at(ev, *d));
+                                    (i, d.day, matched.map(|m| m.color.clone()))
+                                }).collect();
+                                rsx! {
+                                    for (i, day, evt_color) in ticks {
+                                        {
+                                            let x = x_of(i);
+                                            let is_evt = evt_color.is_some();
+                                            let tick_len = if is_evt { 6.0 } else { 3.0 };
+                                            let opacity = if is_evt { "1" } else { "0.5" };
+                                            let col = evt_color.unwrap_or_else(|| "#334155".to_string());
+                                            rsx! {
+                                                line {
+                                                    x1: "{x}", y1: "{plot_bottom + 1.0}",
+                                                    x2: "{x}", y2: "{plot_bottom + 1.0 + tick_len}",
+                                                    stroke: "{col}",
+                                                    stroke_width: "1.2",
+                                                    opacity: "{opacity}"
+                                                }
+                                                if is_evt {
                                                     text {
                                                         x: "{x}",
                                                         y: "{plot_bottom + 18.0}",
@@ -724,7 +896,7 @@ fn ForecastChart(
                                                         font_size: "8",
                                                         font_weight: "600",
                                                         text_anchor: "middle",
-                                                        "{d.day}"
+                                                        "{day}"
                                                     }
                                                 }
                                             }
@@ -734,38 +906,36 @@ fn ForecastChart(
                             }
                         }
 
-                        // Labels mois (au premier jour du mois visible)
-                        for (i, d) in dates.iter().enumerate() {
-                            if d.day == 1 || i == 0 {
-                                {
-                                    let x = x_of(i);
-                                    let lbl = date_label_short(*d);
-                                    rsx! {
-                                        text {
-                                            x: "{x}",
-                                            y: "{height - 10.0}",
-                                            fill: "#64748b",
-                                            font_size: "9.5",
-                                            text_anchor: "middle",
-                                            "{lbl}"
-                                        }
+                        for (idx, label, is_current) in month_marks.iter() {
+                            {
+                                let x = x_of(*idx);
+                                let fill = if *is_current { TODAY_MARKER_COLOR } else { "#cbd5e1" };
+                                let weight = if *is_current { "700" } else { "600" };
+                                let anchor = if *idx == 0 { "start" } else { "middle" };
+                                rsx! {
+                                    text {
+                                        x: "{x}",
+                                        y: "{height - 8.0}",
+                                        fill: "{fill}",
+                                        font_size: "11",
+                                        font_weight: "{weight}",
+                                        text_anchor: "{anchor}",
+                                        "{label}"
                                     }
                                 }
                             }
                         }
 
-                        // Labels Y
-                        text { x: "{padding_x - 6.0}", y: "{y_of(min_val) + 3.0}", fill: "#64748b", font_size: "9", text_anchor: "end", {format!("{:.0}", min_val)} }
-                        text { x: "{padding_x - 6.0}", y: "{y_zero + 3.0}", fill: "#64748b", font_size: "9", text_anchor: "end", "0" }
-                        text { x: "{padding_x - 6.0}", y: "{y_of(max_val) + 3.0}", fill: "#64748b", font_size: "9", text_anchor: "end", {format!("{:.0}", max_val)} }
+                        text { x: "{padding_x - 6.0}", y: "{y_of(min_val) + 4.0}", fill: "#64748b", font_size: "10", text_anchor: "end", {format!("{:.0}", min_val)} }
+                        text { x: "{padding_x - 6.0}", y: "{y_zero + 4.0}", fill: "#64748b", font_size: "10", text_anchor: "end", "0" }
+                        text { x: "{padding_x - 6.0}", y: "{y_of(max_val) + 4.0}", fill: "#64748b", font_size: "10", text_anchor: "end", {format!("{:.0}", max_val)} }
                     }
                 }
             }
 
-            // Récap chiffré
             if !active.is_empty() {
                 div {
-                    style: "display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: #0f172a; border-radius: 6px; border: 1px solid #1e293b;",
+                    style: "display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: #0f172a; border-radius: 6px; border: 1px solid #1e293b; flex-shrink: 0;",
                     div { style: "display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid #1e293b;",
                         div {
                             div { style: "font-size: 0.65rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em;", "Position du curseur" }
@@ -805,11 +975,24 @@ fn ForecastChart(
                             {
                                 let v = cursor_flow_values[fi];
                                 let col = f.color.clone();
+                                let archived = is_archived(f, &bank_txs);
+                                let overdue = is_overdue(f, real_today, &bank_txs);
+                                let (bg, border, opacity, icon) = if archived {
+                                    ("#0f172a", "#334155", "0.6", "📌")
+                                } else if overdue {
+                                    ("#1e293b", OVERDUE_COLOR, "1", "⚠️")
+                                } else {
+                                    ("#1e293b", "#1e293b", "1", "")
+                                };
                                 rsx! {
                                     div {
-                                        style: "display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; background: #1e293b; border-radius: 10px; border: 1px solid #1e293b; font-size: 0.72rem;",
+                                        style: format!("display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; background: {}; border-radius: 10px; border: 1px solid {}; font-size: 0.72rem; opacity: {};",
+                                            bg, border, opacity),
                                         span { style: "width: 8px; height: 8px; border-radius: 50%; background: {col}; flex-shrink: 0;" }
                                         span { style: "color: #94a3b8;", "{f.label}" }
+                                        if !icon.is_empty() {
+                                            span { style: "font-size: 0.7rem;", "{icon}" }
+                                        }
                                         span { style: "color: #f8fafc; font-weight: 600; font-variant-numeric: tabular-nums;",
                                             {format!("{:.0}", v)}
                                         }
@@ -836,37 +1019,52 @@ fn ForecastTable(
     bank_txs: Vec<BankTx>,
     on_reconcile: EventHandler<usize>,
 ) -> Element {
-    let active: Vec<&Flow> = flows.iter().filter(|f| f.active).collect();
-
-    let total_days = range.total_days();
-    let day_step = range.day_step();
-    let dates: Vec<SimpleDate> = (0..total_days)
-        .step_by(day_step as usize)
-        .map(|i| cursor.add_days(i))
-        .collect();
+    let n = range.n_months();
+    let step = range.month_step();
+    let timeline: Vec<i32> = (0..n as i32).map(|k| k * step).collect();
+    let dates: Vec<SimpleDate> = timeline.iter().map(|m| cursor.shift_months(*m)).collect();
+    let p_start = dates.first().copied().unwrap_or(cursor);
+    let p_end = dates.last().copied().unwrap_or(cursor);
     let today_abs = real_today.month_abs();
 
+    let active_all: Vec<&Flow> = flows.iter().filter(|f| f.active).collect();
+    let active: Vec<&Flow> = active_all.into_iter()
+        .filter(|f| flow_in_period(f, p_start, p_end))
+        .collect();
+
+    // Tri : par date d'occurrence croissante.
+    let mut sorted: Vec<&Flow> = active.clone();
+    sorted.sort_by_key(|f| flow_date(f).as_tuple());
+
+    let parsed_bank: Vec<(SimpleDate, f64)> = bank_txs.iter()
+        .filter_map(|tx| parse_iso_date(&tx.date).map(|d| (d, tx.amount)))
+        .collect();
+
+    let baseline_real: f64 = dates.first().map(|d0| {
+        sorted.iter().map(|f| flow_cumulative_at(f, *d0)).sum::<f64>()
+    }).unwrap_or(0.0);
+
     rsx! {
-        div { style: "overflow-x: auto;",
+        div { style: "overflow-x: auto; width: 100%; max-width: 100%;",
             table {
-                style: "width: 100%; border-collapse: collapse; font-size: 0.72rem;",
+                style: "width: 100%; border-collapse: collapse; font-size: 0.75rem;",
                 thead {
                     tr {
                         th { style: "text-align: left; padding: 6px 8px; border-bottom: 1px solid #334155; color: #94a3b8; font-weight: 500; white-space: nowrap; position: sticky; left: 0; background: #1e293b; z-index: 1;", "Flux" }
                         for d in dates.iter() {
                             {
-                                let is_today = d.as_tuple() == real_today.as_tuple();
-                                let is_past = d.month_abs() < today_abs
-                                    || (d.month_abs() == today_abs && d.day < real_today.day);
+                                let lbl = date_label_long(*d);
+                                let is_today = d.month_abs() == today_abs;
+                                let is_past = d.month_abs() < today_abs;
                                 let color = if is_today { TODAY_MARKER_COLOR } else if is_past { "#64748b" } else { "#94a3b8" };
-                                let lbl = if d.day == 1 {
-                                    date_label_short(*d)
-                                } else {
-                                    format!("{}", d.day)
-                                };
+                                let delta = d.month_abs() - today_abs;
+                                let hint = if is_today { "aujourd'hui".to_string() }
+                                           else if delta > 0 { format!("+{}m", delta) }
+                                           else { format!("{}m", delta) };
                                 rsx! {
                                     th {
-                                        style: "text-align: right; padding: 4px 6px; border-bottom: 1px solid #334155; color: {color}; font-weight: 500; white-space: nowrap;",
+                                        style: "text-align: right; padding: 6px 8px; border-bottom: 1px solid #334155; color: {color}; font-weight: 500; white-space: nowrap;",
+                                        div { style: "font-size: 0.65rem; color: #475569; font-weight: 400;", "{hint}" }
                                         "{lbl}"
                                     }
                                 }
@@ -876,7 +1074,7 @@ fn ForecastTable(
                     }
                 }
                 tbody {
-                    for f in active.iter() {
+                    for f in sorted.iter() {
                         {
                             let color = f.color.clone();
                             let fid = f.id;
@@ -886,13 +1084,22 @@ fn ForecastTable(
                                               else if matched >= total_tx / 2 { "#22c55e" }
                                               else { "#f59e0b" };
                             let f_ref = (*f).clone();
+                            let archived = is_archived(f, &bank_txs);
+                            let overdue = is_overdue(f, real_today, &bank_txs);
+                            let row_opacity = if archived { "0.55" } else { "1" };
+                            let row_style = if archived { "italic" } else { "normal" };
                             let subtitle = if f.recurrence.is_recurring() {
                                 format!("récur. {} • paie {}", f.recurrence_day, f.payment_day)
+                            } else if archived {
+                                format!("📌 archivé le {} {}", f.recurrence_day, MONTHS_FR[(f.start_month - 1) as usize])
+                            } else if overdue {
+                                format!("⚠️ en attente depuis le {} {}", f.recurrence_day, MONTHS_FR[(f.start_month - 1) as usize])
                             } else {
                                 format!("ponctuel le {}", f.recurrence_day)
                             };
                             rsx! {
                                 tr {
+                                    style: "opacity: {row_opacity}; font-style: {row_style};",
                                     td { style: "padding: 6px 8px; white-space: nowrap; position: sticky; left: 0; background: #1e293b; z-index: 1;",
                                         div { style: "display: flex; align-items: center; gap: 6px;",
                                             span { style: "width: 8px; height: 8px; border-radius: 50%; background: {color}; flex-shrink: 0;" }
@@ -904,18 +1111,37 @@ fn ForecastTable(
                                     }
                                     for d in dates.iter() {
                                         td {
-                                            style: "padding: 4px 6px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;",
+                                            style: "padding: 6px 8px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;",
                                             {format!("{:.0}", flow_cumulative_at(&f_ref, *d))}
                                         }
                                     }
                                     td { style: "padding: 6px 8px; text-align: right;",
-                                        button {
-                                            style: format!(
-                                                "background: transparent; border: 1px solid {}; color: {}; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; cursor: pointer; font-weight: 500;",
-                                                ratio_color, ratio_color
-                                            ),
-                                            onclick: move |_| on_reconcile.call(fid),
-                                            "🔗 {matched}"
+                                        if archived {
+                                            span {
+                                                style: "display: inline-flex; align-items: center; gap: 4px; color: #64748b; font-size: 0.7rem;",
+                                                "📌"
+                                                span { "archivé" }
+                                            }
+                                        } else if overdue {
+                                            button {
+                                                draggable: "false",
+                                                style: format!(
+                                                    "background: transparent; border: 1px solid {}; color: {}; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; cursor: pointer; font-weight: 500;",
+                                                    OVERDUE_COLOR, OVERDUE_COLOR
+                                                ),
+                                                onclick: move |_| on_reconcile.call(fid),
+                                                "⚠️ à rapprocher"
+                                            }
+                                        } else {
+                                            button {
+                                                draggable: "false",
+                                                style: format!(
+                                                    "background: transparent; border: 1px solid {}; color: {}; padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; cursor: pointer; font-weight: 500;",
+                                                    ratio_color, ratio_color
+                                                ),
+                                                onclick: move |_| on_reconcile.call(fid),
+                                                "🔗 {matched}"
+                                            }
                                         }
                                     }
                                 }
@@ -933,20 +1159,20 @@ fn ForecastTable(
                         }
                         for d in dates.iter() {
                             {
-                                let total: f64 = active.iter().map(|f| flow_cumulative_at(f, *d)).sum();
-                                let is_today = d.as_tuple() == real_today.as_tuple();
+                                let total: f64 = sorted.iter().map(|f| flow_cumulative_at(f, *d)).sum();
+                                let is_today = d.month_abs() == today_abs;
                                 let color = if is_today { TODAY_MARKER_COLOR }
                                             else if total >= 0.0 { "#22c55e" }
                                             else { "#ef4444" };
                                 rsx! {
                                     td {
-                                        style: "padding: 6px; text-align: right; font-weight: 600; color: {color}; font-variant-numeric: tabular-nums; white-space: nowrap;",
+                                        style: "padding: 8px; text-align: right; font-weight: 600; color: {color}; font-variant-numeric: tabular-nums; white-space: nowrap;",
                                         {format!("{:.0}", total)}
                                     }
                                 }
                             }
                         }
-                        td { style: "padding: 6px; text-align: right; color: #64748b; font-size: 0.65rem;", "—" }
+                        td { style: "padding: 8px; text-align: right; color: #64748b; font-size: 0.7rem;", "—" }
                     }
                     tr {
                         style: "border-top: 1px solid #334155;",
@@ -959,31 +1185,27 @@ fn ForecastTable(
                         }
                         for d in dates.iter() {
                             {
-                                let planned_at_d: f64 = active.iter().map(|f| flow_cumulative_at(f, *d)).sum();
-                                let is_past_or_today = d.month_abs() < today_abs
-                                    || (d.month_abs() == today_abs && d.day <= real_today.day);
-                                let real = if is_past_or_today {
-                                    Some(planned_at_d * (1.0 + real_drift_for(*d)))
-                                } else { None };
+                                let planned_at_d: f64 = sorted.iter().map(|f| flow_cumulative_at(f, *d)).sum();
+                                let real = treasury_real_at(*d, dates[0], real_today, baseline_real, &parsed_bank, planned_at_d);
                                 match real {
                                     Some(v) => {
                                         let color = if v >= 0.0 { "#22c55e" } else { "#ef4444" };
-                                        let is_today = d.as_tuple() == real_today.as_tuple();
+                                        let is_today = d.month_abs() == today_abs;
                                         let weight = if is_today { "700" } else { "500" };
                                         rsx! {
                                             td {
-                                                style: "padding: 6px; text-align: right; font-weight: {weight}; color: {color}; font-variant-numeric: tabular-nums; white-space: nowrap;",
+                                                style: "padding: 8px; text-align: right; font-weight: {weight}; color: {color}; font-variant-numeric: tabular-nums; white-space: nowrap;",
                                                 {format!("{:.0}", v)}
                                             }
                                         }
                                     }
                                     None => rsx! {
-                                        td { style: "padding: 6px; text-align: right; color: #475569; font-size: 0.65rem; white-space: nowrap;", "—" }
+                                        td { style: "padding: 8px; text-align: right; color: #475569; font-size: 0.7rem; white-space: nowrap;", "—" }
                                     }
                                 }
                             }
                         }
-                        td { style: "padding: 6px; text-align: right; color: #64748b; font-size: 0.65rem;", "—" }
+                        td { style: "padding: 8px; text-align: right; color: #64748b; font-size: 0.7rem;", "—" }
                     }
                 }
             }
