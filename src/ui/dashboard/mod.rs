@@ -4,5 +4,6 @@ pub mod tenants;
 pub mod tasks;
 pub mod modal;
 pub mod dashboard;
+pub mod vat;
 
 pub use dashboard::DashboardWidgets;

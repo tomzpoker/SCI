@@ -242,10 +242,6 @@ fn matched_amount(flow: &Flow, bank_txs: &[BankTx]) -> f64 {
 }
 
 /// Un flux est "archivé" (📌) seulement s'il est entièrement rapproché.
-/// Règle : le total rapproché couvre le montant attendu.
-/// - Ponctuel : un seul impact attendu = flow.amount
-/// - Récurrent : on ne peut pas vérifier "tout" sans notion d'arrêt explicite
-///   → considéré comme jamais archivé (reste actif).
 fn is_archived(flow: &Flow, bank_txs: &[BankTx]) -> bool {
     match flow.recurrence {
         Recurrence::Once => {
@@ -364,6 +360,12 @@ pub fn ForecastWidget() -> Element {
     let year_max = real_today().year + 10;
 
     let is_max = maximized();
+
+    // Période courante (pour filtrer les pills)
+    let filter_dates = build_dates(range(), cursor());
+    let filter_start = filter_dates.first().copied().unwrap_or(cursor());
+    let filter_end = filter_dates.last().copied().unwrap_or(cursor());
+
     let container_style = if is_max {
         "position: fixed; inset: 16px; z-index: 9999; background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 10px; overflow: hidden;"
     } else {
@@ -518,9 +520,9 @@ pub fn ForecastWidget() -> Element {
                 }
             }
 
-            // Ligne 3 : pills
+            // Ligne 3 : pills (uniquement les flux présents dans la période consultée)
             div { style: "display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0;",
-                for f in flows().iter() {
+                for f in flows().iter().filter(|f| flow_in_period(f, filter_start, filter_end)) {
                     {
                         let fid = f.id;
                         let color = f.color.clone();
@@ -639,7 +641,6 @@ fn ForecastChart(
     let today_abs = real_today.month_abs();
     let is_month_view = range == TimeRange::Month;
 
-    // === Filtre : ne garder que les flux dont la fenêtre intersecte la période ===
     let active_all: Vec<&Flow> = flows.iter().filter(|f| f.active).collect();
     let active: Vec<&Flow> = active_all.into_iter()
         .filter(|f| flow_in_period(f, p_start, p_end))
@@ -1032,7 +1033,6 @@ fn ForecastTable(
         .filter(|f| flow_in_period(f, p_start, p_end))
         .collect();
 
-    // Tri : par date d'occurrence croissante.
     let mut sorted: Vec<&Flow> = active.clone();
     sorted.sort_by_key(|f| flow_date(f).as_tuple());
 

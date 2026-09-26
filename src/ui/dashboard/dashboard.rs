@@ -4,6 +4,8 @@ use super::forecast::ForecastWidget;
 use super::tenants::TenantBars;
 use super::tasks::TaskList;
 use super::modal::TenantModal;
+use super::vat::VatWidget;
+use super::models::BankTx;
 
 #[component]
 pub fn DashboardWidgets() -> Element {
@@ -58,12 +60,25 @@ pub fn DashboardWidgets() -> Element {
         Task { id: 4, label: "Declaration annuelle (liasse 2072)".into(), due_in_days: 128, category: TaskCategory::Declaration },
     ];
 
+    let bank_txs = vec![
+        BankTx { id: 10, date: "2026-07-05".into(), label: "VIREMENT LOYER DUPONT".into(),  amount:  800.0 },
+        BankTx { id: 11, date: "2026-08-05".into(), label: "VIREMENT LOYER MARTIN".into(),  amount:  950.0 },
+        BankTx { id: 12, date: "2026-09-05".into(), label: "VIREMENT LOYER PETIT".into(),   amount:  700.0 },
+        BankTx { id: 20, date: "2026-07-15".into(), label: "PRLV EDF".into(),                amount: -220.0 },
+        BankTx { id: 21, date: "2026-08-15".into(), label: "PRLV EDF".into(),                amount: -240.0 },
+        BankTx { id: 22, date: "2026-09-15".into(), label: "PRLV EAU".into(),                amount: -180.0 },
+        BankTx { id: 30, date: "2026-07-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
+        BankTx { id: 31, date: "2026-08-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
+        BankTx { id: 32, date: "2026-09-01".into(), label: "ECHEANCE CREDIT IMMO".into(),    amount: -1200.0 },
+    ];	
+
     let mut selected_tenant = use_signal(|| None::<Tenant>);
     let mut dragged_id = use_signal(|| None::<String>);
     let mut widgets = use_signal(|| vec![
         WidgetState { id: "forecast", title: "PREVISIONNEL", col_span: 8, pinned: false, order: 0 },
         WidgetState { id: "tenants", title: "LOCAUX & SOLDES", col_span: 4, pinned: false, order: 1 },
         WidgetState { id: "tasks", title: "TACHES ADMINISTRATIVES", col_span: 6, pinned: false, order: 2 },
+        WidgetState { id: "vat", title: "TVA COLLECTÉE", col_span: 6, pinned: false, order: 3 },
     ]);
 
     rsx! {
@@ -134,6 +149,7 @@ pub fn DashboardWidgets() -> Element {
                                 "forecast" => rsx! { ForecastWidget {} },
                                 "tenants" => rsx! { TenantBars { tenants: tenants.clone(), on_select: move |t| selected_tenant.set(Some(t)) } },
                                 "tasks" => rsx! { TaskList { tasks: tasks.clone() } },
+                                "vat" => rsx! { VatWidget { bank_txs: bank_txs.clone() } },
                                 _ => rsx! { div { "Widget inconnu" } },
                             }
                         }
