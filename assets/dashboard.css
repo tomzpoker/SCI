@@ -1,0 +1,94 @@
+﻿/* === Dashboard Modulaire SCI === */
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 16px;
+    padding: 4px 0;
+}
+
+.dash-widget {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #334155;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: grab;
+    position: relative;
+}
+
+.dash-widget:active { cursor: grabbing; }
+.dash-widget.dragging { opacity: 0.5; transform: scale(1.02); }
+.dash-widget.pinned { cursor: default; border-color: #38bdf8; }
+
+.dash-widget-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    border-bottom: 1px solid #334155;
+    padding-bottom: 8px;
+}
+
+.dash-widget-header h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+}
+
+.dash-pin-btn {
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.dash-pin-btn:hover { background: #334155; }
+.dash-pin-btn.pinned { color: #38bdf8; }
+
+.dash-chart-container { flex: 1; position: relative; min-height: 160px; }
+.dash-chart-container svg { width: 100%; height: 100%; overflow: visible; }
+
+.dash-bar { cursor: pointer; transition: opacity 0.2s; }
+.dash-bar:hover { opacity: 0.8; }
+
+.dash-modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex; justify-content: center; align-items: center;
+    z-index: 1000;
+}
+
+.dash-modal {
+    background: #1e293b; padding: 24px; border-radius: 12px;
+    max-width: 520px; width: 90%; border: 1px solid #334155;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+.dash-modal h2 { margin-top: 0; color: #38bdf8; }
+.dash-modal-close {
+    background: #ef4444; color: white; border: none;
+    padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-top: 16px;
+}
+
+.dash-widget-4 { grid-column: span 4; }
+.dash-widget-6 { grid-column: span 6; }
+.dash-widget-8 { grid-column: span 8; }
+.dash-widget-12 { grid-column: span 12; }
+
+@media (max-width: 900px) {
+    .dash-widget-4, .dash-widget-6, .dash-widget-8 {
+        grid-column: span 12;
+    }
+}
+/* Widget compact : colle au contenu, ne s'étire pas sur la hauteur de la ligne */
+.dash-widget.compact {
+    align-self: start;
+}

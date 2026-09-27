@@ -1,0 +1,43 @@
+services:
+  dolibarr-db:
+    image: postgres:17-alpine
+    container_name: sci-family-dolibarr-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - dolibarr_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  dolibarr:
+    image: tuxgasy/dolibarr:latest
+    container_name: sci-family-dolibarr
+    restart: unless-stopped
+    depends_on:
+      dolibarr-db:
+        condition: service_healthy
+    environment:
+      DOLI_DB_TYPE: "pgsql"
+      DOLI_DB_HOST: "dolibarr-db"
+      DOLI_DB_HOST_PORT: "5432"
+      DOLI_DB_USER: ${DB_USER}
+      DOLI_DB_PASSWORD: ${DB_PASSWORD}
+      DOLI_DB_NAME: ${DB_NAME}
+      DOLI_URL_ROOT: ${DOLI_URL_ROOT}
+      PHP_INI_DATE_TIMEZONE: "Europe/Paris"
+    ports:
+      - "8081:80"
+    volumes:
+      - dolibarr_docs:/var/www/documents
+      - dolibarr_custom:/var/www/html/custom
+
+volumes:
+  dolibarr_pgdata:
+  dolibarr_docs:
+  dolibarr_custom:

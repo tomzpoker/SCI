@@ -26,7 +26,11 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use uuid::Uuid;
 
-const CSS: Asset = asset!("/assets/main.css");
+mod assistant_overlay;
+mod dashboard;
+
+const CSS: &str = include_str!("../assets/main.css");
+const DASHBOARD_CSS: &str = include_str!("../assets/dashboard.css");
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
@@ -90,18 +94,34 @@ impl Page {
             Page::Security => "Sécurité / Recovery",
         }
     }
+
+    fn nav_label(self) -> &'static str {
+        match self {
+            Page::Dashboard => "Accueil",
+            Page::Patrimony => "Propriétés",
+            Page::Bank      => "Finances",
+            Page::Tasks     => "Tâches",
+            Page::Documents => "Documents",
+            Page::Setup     => "Paramètres",
+            _ => self.label(),
+        }
+    }
 }
 
 #[component]
 pub fn App() -> Element {
     let mut auth_epoch=use_signal(||0u64);
     let auth=use_resource(move||{let _=auth_epoch();async move{auth_status().await}});
-    rsx!{document::Link{rel:"stylesheet",href:CSS},match auth.read().as_ref(){
-        Some(Ok(status)) if status.authenticated=>rsx!{AuthenticatedShell{auth_status:status.clone(),on_logout:move |_|auth_epoch+=1}},
-        Some(Ok(_))=>rsx!{LoginPage{on_success:move |_|auth_epoch+=1}},
-        Some(Err(e))=>rsx!{div {class:"login-shell",div {class:"login-card",h1 {"SCI FAMILY"},p {"Initialisation sécurité impossible : {e}"}}}},
-        None=>rsx!{div {class:"login-shell",div {class:"login-card",h1 {"SCI FAMILY"},p {"Initialisation sécurisée…"}}}},
-    }}
+    rsx!{
+        style { dangerous_inner_html: CSS }
+        style { dangerous_inner_html: DASHBOARD_CSS }
+        match auth.read().as_ref(){
+            Some(Ok(status)) if status.authenticated=>rsx!{AuthenticatedShell{auth_status:status.clone(),on_logout:move |_|auth_epoch+=1}},
+            Some(Ok(_))=>rsx!{LoginPage{on_success:move |_|auth_epoch+=1}},
+            Some(Err(e))=>rsx!{div {class:"login-shell",div {class:"login-card",h1 {"SCI FAMILY"},p {"Initialisation sécurité impossible : {e}"}}}},
+            None=>rsx!{div {class:"login-shell",div {class:"login-card",h1 {"SCI FAMILY"},p {"Initialisation sécurisée…"}}}},
+        }
+    }
 }
 
 #[component]
@@ -115,61 +135,156 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
     let shell_class=if fun{format!("app-shell theme-{} fun-mode",theme.to_lowercase())}else{format!("app-shell theme-{}",theme.to_lowercase())};
     let custom_style=pref.as_ref().and_then(|p|{let a=p.custom_theme.get("accent").and_then(|v|v.as_str()).unwrap_or("");let b=p.custom_theme.get("background").and_then(|v|v.as_str()).unwrap_or("");if a.is_empty()&&b.is_empty(){None}else{Some(format!("--custom-accent:{};--custom-background:{};",a,b))}}).unwrap_or_default();
     let role_label=auth_status.role.clone().unwrap_or_else(||"Rôle inconnu".into());
-    rsx!{div {class:"{shell_class}",style:"{custom_style}",aside{class:"sidebar",div {class:"brand","SCI FAMILY"},div {class:"brand-sub","PILOTAGE ADMINISTRATIF AUTONOME"},div {class:"session-chip",div {class:"small","Session"},strong {"{auth_status.display_name.clone().unwrap_or_default()}"},span {class:"small","{role_label}"}},nav {
-        NavItem{page,current:Page::Dashboard}
-        NavItem{page,current:Page::ZeroSaisie}
-        NavItem{page,current:Page::Bank}
-        NavItem{page,current:Page::Patrimony}
-        NavItem{page,current:Page::Tenants}
-        NavItem{page,current:Page::Documents}
-        NavItem{page,current:Page::Calendar}
+    rsx!{div {class:"{shell_class}",style:"{custom_style}",
+        aside {
+            class: "sidebar",
 
-        div {
-            class: "nav-separator"
-        }
-
-        NavItem{page,current:Page::Setup}
-
-        details {
-            class: "expert-nav",
-
-            summary {
-                "🛠️ Outils avancés"
+            // --- Marque ---
+            div { class: "sidebar-brand",
+                div { class: "sidebar-brand-icon",
+                    svg {
+                        xmlns: "http://www.w3.org/2000/svg",
+                        width: "20", height: "20",
+                        view_box: "0 0 24 24",
+                        fill: "none",
+                        stroke: "currentColor",
+                        stroke_width: "2",
+                        stroke_linecap: "round",
+                        stroke_linejoin: "round",
+                        path { d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }
+                        polyline { points: "9 22 9 12 15 12 15 22" }
+                    }
+                }
+                div { class: "sidebar-brand-text",
+                    div { class: "sidebar-brand-name", "SCI FAMILY" }
+                    div { class: "sidebar-brand-sub", "Pilotage administratif" }
+                }
             }
 
-            div {
-                class: "expert-nav-list",
+            // --- Session ---
+            div { class: "session-chip",
+                div { class: "small", "Session" }
+                strong { "{auth_status.display_name.clone().unwrap_or_default()}" }
+                span { class: "small", "{role_label}" }
+            }
 
-                NavItem{page,current:Page::Treasury}
-                NavItem{page,current:Page::Associates}
-                NavItem{page,current:Page::Rentals}
-                NavItem{page,current:Page::Billing}
-                NavItem{page,current:Page::EInvoice}
-                NavItem{page,current:Page::Assistant}
-                NavItem{page,current:Page::Vat}
-                NavItem{page,current:Page::Recovery}
-                NavItem{page,current:Page::Generation}
-                NavItem{page,current:Page::Automations}
+            // --- Navigation principale ---
+            nav {
+                NavItem{page,current:Page::Dashboard}
+                NavItem{page,current:Page::Patrimony}
+                NavItem{page,current:Page::Bank}
                 NavItem{page,current:Page::Tasks}
-                NavItem{page,current:Page::ValidationInbox}
-                NavItem{page,current:Page::Workflows}
-                NavItem{page,current:Page::Rules}
-                NavItem{page,current:Page::Engines}
-                NavItem{page,current:Page::LegalEntities}
-                NavItem{page,current:Page::SarlActivities}
-                NavItem{page,current:Page::Audit}
-                NavItem{page,current:Page::Security}
-            }
-        }
-    },div {class:"sidebar-footer","Données locales • règles versionnées • audit"},button {class:"secondary logout-button",onclick:move |_|{let cb=on_logout.clone();async move{let _=crate::security::logout().await;dioxus::fullstack::clear_request_headers();cb.call(())}},"Se déconnecter"}},main {class:"main",header {class:"topbar",div {div {class:"eyebrow","SCI FAMILY PILOT • {role_label}"},h1 {"{page().label()}" }},div {class:"top-actions",EntityScopeSelector{refresh,page,initial_entity_id:auth_status.legal_entity_id},button {class:"secondary",onclick:move |_|page.set(Page::Setup),"Configuration"},button {class:"primary",onclick:move |_|async move{let _=run_anticipation_cycle().await;refresh+=1},"Lancer l’anticipation"}}},match page(){
-        Page::Dashboard=>rsx!{Dashboard{refresh,on_setup:move |_|page.set(Page::Setup)}},
-        Page::ZeroSaisie=>rsx!{ZeroSaisiePage{refresh}}, Page::Security=>rsx!{SecurityPage{refresh,on_logged_out:move |_|on_logout.call(())}},
-        Page::Setup=>rsx!{SetupPage{refresh}}, Page::LegalEntities=>rsx!{LegalEntitiesPage{refresh}}, Page::SarlActivities=>rsx!{SarlActivitiesPage{refresh}}, Page::Rules=>rsx!{RulesPage{refresh}}, Page::Engines=>rsx!{CommonEnginesPage{refresh}}, Page::Associates=>rsx!{AssociatesPage{refresh}},
-        Page::Workflows=>rsx!{WorkflowPage{refresh}}, Page::ValidationInbox=>rsx!{ValidationInboxPage{refresh}}, Page::Tenants=>rsx!{TenantsPage{refresh}}, Page::Patrimony=>rsx!{PatrimonyPage{refresh}},
-        Page::Rentals=>rsx!{LeasesPage{refresh}}, Page::Billing=>rsx!{BillingManagementPage{refresh}}, Page::EInvoice=>rsx!{EInvoicePage{refresh}}, Page::Assistant=>rsx!{AssistantPage{refresh}}, Page::Bank=>rsx!{BankManagementPage{refresh}}, Page::Treasury=>rsx!{TreasuryPage{refresh}},
-        Page::Vat=>rsx!{FiscalPage{refresh}}, Page::Recovery=>rsx!{RecoveryPage{refresh}}, Page::Generation=>rsx!{GenerationPage{refresh}}, Page::Calendar=>rsx!{CalendarPage{refresh}}, Page::Documents=>rsx!{DocumentsWorkflowPage{refresh}}, Page::Automations=>rsx!{AutomationsPage{refresh}}, Page::Tasks=>rsx!{TasksPage{refresh}}, Page::Audit=>rsx!{AuditPage{refresh}},
-    }}}}}
+                NavItem{page,current:Page::Documents}
+                NavItem{page,current:Page::Automations}
+                NavItem{page,current:Page::Setup}
 
+                // --- Mode expert (pliable) ---
+                details {
+                    class: "expert-nav",
+                    summary {
+                        svg {
+                            xmlns: "http://www.w3.org/2000/svg",
+                            width: "14", height: "14",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "currentColor",
+                            stroke_width: "1.8",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            path { d: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" }
+                        }
+                        "Outils avancés"
+                    }
+                    div {
+                        class: "expert-nav-list",
+
+                        NavItem{page,current:Page::ZeroSaisie}
+                        NavItem{page,current:Page::Tenants}
+                        NavItem{page,current:Page::Calendar}
+                        NavItem{page,current:Page::Treasury}
+                        NavItem{page,current:Page::Associates}
+                        NavItem{page,current:Page::Rentals}
+                        NavItem{page,current:Page::Billing}
+                        NavItem{page,current:Page::EInvoice}
+                        NavItem{page,current:Page::Assistant}
+                        NavItem{page,current:Page::Vat}
+                        NavItem{page,current:Page::Recovery}
+                        NavItem{page,current:Page::Generation}
+                        NavItem{page,current:Page::ValidationInbox}
+                        NavItem{page,current:Page::Workflows}
+                        NavItem{page,current:Page::Rules}
+                        NavItem{page,current:Page::Engines}
+                        NavItem{page,current:Page::LegalEntities}
+                        NavItem{page,current:Page::SarlActivities}
+                        NavItem{page,current:Page::Audit}
+                        NavItem{page,current:Page::Security}
+                    }
+                }
+            }
+
+            // --- Footer ---
+            div { class: "sidebar-footer", "Données locales • audit activé" }
+            button {
+                class: "secondary logout-button",
+                onclick: move |_| {
+                    let cb = on_logout.clone();
+                    async move {
+                        let _ = crate::security::logout().await;
+                        dioxus::fullstack::clear_request_headers();
+                        cb.call(())
+                    }
+                },
+                "Se déconnecter"
+            }
+        },
+
+        main {
+            class: "main",
+            header {
+                class: "topbar",
+                div {
+                    div { class: "eyebrow", "SCI FAMILY PILOT • {role_label}" }
+                    h1 { "{page().label()}" }
+                }
+                div {
+                    class: "top-actions",
+                    EntityScopeSelector{refresh,page,initial_entity_id:auth_status.legal_entity_id}
+                    button { class:"secondary", onclick:move |_|page.set(Page::Setup), "Configuration" }
+                }
+            },
+            match page(){
+                Page::Dashboard=>rsx!{dashboard::DashboardWidgets{}},
+                Page::ZeroSaisie=>rsx!{ZeroSaisiePage{refresh}},
+                Page::Security=>rsx!{SecurityPage{refresh,on_logged_out:move |_|on_logout.call(())}},
+                Page::Setup=>rsx!{SetupPage{refresh}},
+                Page::LegalEntities=>rsx!{LegalEntitiesPage{refresh}},
+                Page::SarlActivities=>rsx!{SarlActivitiesPage{refresh}},
+                Page::Rules=>rsx!{RulesPage{refresh}},
+                Page::Engines=>rsx!{CommonEnginesPage{refresh}},
+                Page::Associates=>rsx!{AssociatesPage{refresh}},
+                Page::Workflows=>rsx!{WorkflowPage{refresh}},
+                Page::ValidationInbox=>rsx!{ValidationInboxPage{refresh}},
+                Page::Tenants=>rsx!{TenantsPage{refresh}},
+                Page::Patrimony=>rsx!{PatrimonyPage{refresh}},
+                Page::Rentals=>rsx!{LeasesPage{refresh}},
+                Page::Billing=>rsx!{BillingManagementPage{refresh}},
+                Page::EInvoice=>rsx!{EInvoicePage{refresh}},
+                Page::Assistant=>rsx!{AssistantPage{refresh}},
+                Page::Bank=>rsx!{BankManagementPage{refresh}},
+                Page::Treasury=>rsx!{TreasuryPage{refresh}},
+                Page::Vat=>rsx!{FiscalPage{refresh}},
+                Page::Recovery=>rsx!{RecoveryPage{refresh}},
+                Page::Generation=>rsx!{GenerationPage{refresh}},
+                Page::Calendar=>rsx!{CalendarPage{refresh}},
+                Page::Documents=>rsx!{DocumentsWorkflowPage{refresh}},
+                Page::Automations=>rsx!{AutomationsPage{refresh}},
+                Page::Tasks=>rsx!{TasksPage{refresh}},
+                Page::Audit=>rsx!{AuditPage{refresh}},
+            },
+            assistant_overlay::AssistantOverlay{}
+        }
+    }}
+}
 
 #[component]
 fn EntityScopeSelector(mut refresh: Signal<u64>, mut page: Signal<Page>, initial_entity_id: Option<Uuid>) -> Element {
@@ -220,7 +335,126 @@ fn EntityScopeSelector(mut refresh: Signal<u64>, mut page: Signal<Page>, initial
 
 #[component]
 fn NavItem(mut page: Signal<Page>, current: Page) -> Element {
-    rsx! {button {class:if page()==current{"nav-item active"}else{"nav-item"},onclick:move |_|page.set(current),{current.label()}}}
+    let is_active = page() == current;
+    rsx! {
+        button {
+            class: if is_active { "nav-item active" } else { "nav-item" },
+            onclick: move |_| page.set(current),
+            span { class: "nav-icon", { nav_icon_svg(current) } }
+            span { class: "nav-label", { current.nav_label() } }
+        }
+    }
+}
+
+/// Icônes SVG minimalistes (style Feather) — dimensions explicites pour éviter tout débordement.
+fn nav_icon_svg(p: Page) -> Element {
+    match p {
+        // Maison (Accueil uniquement)
+        Page::Dashboard => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }
+                polyline { points: "9 22 9 12 15 12 15 22" }
+            }
+        },
+        // Immeuble (PropriÃ©tÃ©s)
+        Page::Patrimony => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M3 21h18" }
+                path { d: "M5 21V7l7-4v18" }
+                path { d: "M19 21V11l-7-4" }
+                path { d: "M9 9v.01M9 12v.01M9 15v.01M9 18v.01M15 13v.01M15 16v.01M15 19v.01" }
+            }
+        },
+        // Carte bancaire (Argent / TrÃ©sorerie)
+        Page::Bank | Page::Treasury => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                rect { x: "2", y: "5", width: "20", height: "14", rx: "2" }
+                line { x1: "2", y1: "10", x2: "22", y2: "10" }
+            }
+        },
+        // Utilisateurs (Locataires / AssociÃ©s)
+        Page::Tenants | Page::Associates => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" }
+                circle { cx: "9", cy: "7", r: "4" }
+                path { d: "M23 21v-2a4 4 0 0 0-3-3.87" }
+                path { d: "M16 3.13a4 4 0 0 1 0 7.75" }
+            }
+        },
+        // Document (Documents / Courriers)
+        Page::Documents | Page::Generation => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                path { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }
+                polyline { points: "14 2 14 8 20 8" }
+                line { x1: "8", y1: "13", x2: "16", y2: "13" }
+                line { x1: "8", y1: "17", x2: "16", y2: "17" }
+            }
+        },
+        // Calendrier (Ã‰chÃ©ances / FiscalitÃ© / TÃ¢ches)
+        Page::Calendar | Page::Vat | Page::Tasks => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                rect { x: "3", y: "4", width: "18", height: "18", rx: "2" }
+                line { x1: "16", y1: "2", x2: "16", y2: "6" }
+                line { x1: "8", y1: "2", x2: "8", y2: "6" }
+                line { x1: "3", y1: "10", x2: "21", y2: "10" }
+            }
+        },
+        // Ã‰clair (Automatisations)
+        Page::Automations => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                polygon { points: "13 2 3 14 12 14 11 22 21 10 12 10 13 2" }
+            }
+        },
+        // RÃ©glages (Config / RÃ¨gles / Moteurs / EntitÃ©s)
+        Page::Setup | Page::Rules | Page::Engines | Page::LegalEntities => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                circle { cx: "12", cy: "12", r: "3" }
+                path { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" }
+            }
+        },
+        // DÃ©faut : cercle
+        _ => rsx! {
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "18", height: "18",
+                view_box: "0 0 24 24", fill: "none", stroke: "currentColor",
+                stroke_width: "1.8", stroke_linecap: "round", stroke_linejoin: "round",
+                circle { cx: "12", cy: "12", r: "4" }
+            }
+        },
+    }
 }
 
 #[component]
@@ -557,6 +791,7 @@ fn Dashboard(refresh: Signal<u64>, on_setup: EventHandler<MouseEvent>) -> Elemen
         },
     }
 }
+
 #[server]
 pub async fn dashboard_real_cash_history(months: i32) -> Result<Vec<(NaiveDate, i64)>, ServerFnError> {
     #[cfg(feature = "server")]
@@ -725,7 +960,12 @@ fn TreasuryDualCurveChart(
                 div { class: "empty-state", h3 { "Pas encore assez de données" }, p { "Le graphique apparaîtra dès que la banque et le prévisionnel contiendront des données." } }
             } else {
                 div { class: "dual-curve-wrap",
-                    svg { class: "dual-curve-svg", view_box: "0 0 760 280", preserve_aspect_ratio: "none",
+                    svg {
+                        xmlns: "http://www.w3.org/2000/svg",
+                        width: "760", height: "280",
+                        class: "dual-curve-svg",
+                        view_box: "0 0 760 280",
+                        preserve_aspect_ratio: "none",
                         line { x1: "22", y1: "45", x2: "738", y2: "45", class: "curve-grid-line" }
                         line { x1: "22", y1: "95", x2: "738", y2: "95", class: "curve-grid-line" }
                         line { x1: "22", y1: "145", x2: "738", y2: "145", class: "curve-grid-line" }
@@ -1192,65 +1432,547 @@ fn DocumentsPage(refresh: Signal<u64>) -> Element {
 #[component]
 fn AutomationsPage(refresh: Signal<u64>) -> Element {
     let mut bump = use_signal(|| 0u64);
-    let rules = use_resource(move || { let _=refresh(); let _=bump(); async move { list_automation_rules().await.unwrap_or_default() } });
-    let policies = use_resource(move || { let _=refresh(); let _=bump(); async move { crate::workflow::list_automation_policies().await.unwrap_or_default() } });
+    let rules = use_resource(move || {
+        let _ = refresh();
+        let _ = bump();
+        async move { list_automation_rules().await.unwrap_or_default() }
+    });
+    let policies = use_resource(move || {
+        let _ = refresh();
+        let _ = bump();
+        async move { crate::workflow::list_automation_policies().await.unwrap_or_default() }
+    });
     let mut result = use_signal(|| None::<AutomationRunResult>);
-    let mut policy_activity = use_signal(String::new);
-    let mut policy_object = use_signal(|| "AUTOMATION".to_owned());
-    let mut policy_risk = use_signal(|| "MEDIUM".to_owned());
-    let mut policy_level = use_signal(|| "2".to_owned());
-    let mut policy_validation = use_signal(|| true);
-    let mut policy_msg = use_signal(String::new);
+
+    // Modale "Modifier"
+    let mut editing_rule = use_signal(|| None::<AutomationRuleItem>);
+    let mut edit_mode = use_signal(|| "anchor".to_string()); // "anchor" | "horizon"
+    let mut edit_due_day = use_signal(|| "24".to_string());
+    let mut edit_urgency = use_signal(|| "5".to_string());
+    let mut edit_prep = use_signal(|| "21".to_string());
+    let mut edit_horizon = use_signal(|| "30".to_string());
+    let mut edit_priority = use_signal(|| "50".to_string());
+
+    // Modale "Nouvelle règle"
+    let mut show_add = use_signal(|| false);
+    let mut new_code = use_signal(String::new);
+    let mut new_name = use_signal(String::new);
+    let mut new_desc = use_signal(String::new);
+    let mut new_trigger = use_signal(|| "DATE".to_string());
+    let mut new_mode = use_signal(|| "anchor".to_string());
+    let mut new_due_day = use_signal(|| "24".to_string());
+    let mut new_urgency = use_signal(|| "5".to_string());
+    let mut new_prep = use_signal(|| "21".to_string());
+    let mut new_horizon = use_signal(|| "30".to_string());
+    let mut new_priority = use_signal(|| "50".to_string());
+    let mut new_auto_exec = use_signal(|| false);
+
+    let mut rule_msg = use_signal(String::new);
+
     rsx! {
-        ModuleHeader { title:"Automatisations", kicker:"RÈGLES • NIVEAUX 0–5 • IDEMPOTENCE", detail:"Les règles sont exécutées sans doublonner ; le niveau d’automatisation est configurable par entité, activité, type et risque." }
+        ModuleHeader {
+            title: "Automatisations",
+            kicker: "RÈGLES • ANCRES • URGENCES",
+            detail: "Configure des règles d'anticipation : jour fixe du mois (TVA, loyers) ou délai relatif (assurances, clôtures)."
+        }
+
+        // Cycle manuel
         section {
             class: "panel",
             div {
                 class: "panel-head",
-                h3 { "Cycle manuel" },
-                button { class:"primary", onclick: move |_| async move { result.set(run_anticipation_cycle().await.ok()); bump+=1 }, "Exécuter maintenant" }
+                h3 { "Cycle manuel" }
+                button {
+                    class: "primary",
+                    onclick: move |_| async move {
+                        result.set(run_anticipation_cycle().await.ok());
+                        bump += 1;
+                    },
+                    "Exécuter maintenant"
+                }
             }
         }
-        if let Some(r)=result() {
-            section { class:"run-result", h3 { "Cycle terminé" }, p { {format!("{} règles évaluées • {} tâches créées • {}", r.evaluated_rules, r.created_tasks, r.ran_at.format("%d/%m/%Y %H:%M"))} } }
-        }
-        section {
-            class:"panel",
-            h3 { "Politique d'automatisation" },
-            div {
-                class:"form-grid",
-                FormField { label:"Activité (optionnelle)", value:policy_activity(), oninput:move|e:FormEvent|policy_activity.set(e.value()) },
-                FormField { label:"Type", value:policy_object(), oninput:move|e:FormEvent|policy_object.set(e.value()) },
-                FormField { label:"Risque", value:policy_risk(), oninput:move|e:FormEvent|policy_risk.set(e.value()) },
-                FormField { label:"Niveau 0–5", value:policy_level(), oninput:move|e:FormEvent|policy_level.set(e.value()) },
+        if let Some(r) = result() {
+            section {
+                class: "panel",
+                h3 { "Cycle terminé" }
+                p { {format!("{} règles évaluées • {} tâches créées • {}",
+                    r.evaluated_rules, r.created_tasks, r.ran_at.format("%d/%m/%Y %H:%M"))} }
             }
-            label { class:"check-row", input { r#type:"checkbox", checked:policy_validation(), onchange:move|e:FormEvent|policy_validation.set(e.value()!="false") }, " Validation requise" }
-            button { class:"primary", onclick:move |_| async move { let level=policy_level().parse::<i16>().unwrap_or(2); match crate::workflow::save_automation_policy(None,policy_activity(),policy_object(),policy_risk(),level,policy_validation(),true).await { Ok(_)=>{ policy_msg.set("Politique enregistrée".into()); bump+=1 }, Err(e)=>policy_msg.set(e.to_string()) } }, "Enregistrer" }
-            span { class:"save-ok", "{policy_msg}" }
         }
+
+        // Liste des règles
         section {
-            class:"panel",
-            h3 { "Politiques actives" },
+            class: "panel",
             div {
-                class:"data-list",
-                for p in policies.read().as_deref().unwrap_or(&[]).iter() {
+                class: "panel-head",
+                div {
+                    h3 { "Règles d'automatisation" }
+                    span { class: "small",
+                        {format!("{} règle(s)", rules.read().as_deref().unwrap_or(&[]).len())} }
+                }
+                button {
+                    class: "primary",
+                    onclick: move |_| {
+                        new_code.set(String::new());
+                        new_name.set(String::new());
+                        new_desc.set(String::new());
+                        new_trigger.set("DATE".to_string());
+                        new_mode.set("anchor".to_string());
+                        new_due_day.set("24".to_string());
+                        new_urgency.set("5".to_string());
+                        new_prep.set("21".to_string());
+                        new_horizon.set("30".to_string());
+                        new_priority.set("50".to_string());
+                        new_auto_exec.set(false);
+                        rule_msg.set(String::new());
+                        show_add.set(true);
+                    },
+                    "+ Nouvelle règle"
+                }
+            }
+            if !rule_msg().is_empty() {
+                div { style: "color: #f87171; font-size: 0.8rem; margin-bottom: 8px;", "{rule_msg}" }
+            }
+            div { style: "display: flex; flex-direction: column; gap: 8px;",
+                for rule in rules.read().as_deref().unwrap_or(&[]).iter().cloned() {
                     div {
-                        class:"data-row",
+                        style: "background: var(--bg-glass); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px;",
+                        div { style: "flex: 1; min-width: 0;",
+                            div { style: "font-size: 0.88rem; font-weight: 500; color: #e2e8f0;",
+                                "{rule.name}"
+                            }
+                            div { style: "font-size: 0.72rem; color: #94a3b8; margin-top: 2px;",
+                                if let Some(d) = rule.due_day_of_month {
+                                    {format!("{} • jour {} du mois • urgent J-{} • priorité {}",
+                                        rule.code, d, rule.urgency_lead_days, rule.priority)}
+                                } else {
+                                    {format!("{} • horizon {} j • priorité {}",
+                                        rule.code, rule.horizon_days, rule.priority)}
+                                }
+                            }
+                            if !rule.description.is_empty() {
+                                div { style: "font-size: 0.7rem; color: #64748b; margin-top: 2px;",
+                                    "{rule.description}"
+                                }
+                            }
+                        }
+                        button {
+                            class: if rule.enabled { "primary" } else { "secondary" },
+                            style: "font-size: 0.72rem; padding: 4px 10px; flex-shrink: 0;",
+                            onclick: {
+                                let id = rule.id;
+                                let new_enabled = !rule.enabled;
+                                move |_| async move {
+                                    let _ = set_automation_enabled(id, new_enabled).await;
+                                    bump += 1;
+                                }
+                            },
+                            if rule.enabled { "Activée" } else { "Désactivée" }
+                        }
+                        button {
+                            class: "secondary",
+                            style: "font-size: 0.72rem; padding: 4px 10px; flex-shrink: 0;",
+                            onclick: {
+                                let r = rule.clone();
+                                move |_| {
+                                    edit_horizon.set(r.horizon_days.to_string());
+                                    edit_priority.set(r.priority.to_string());
+                                    if r.due_day_of_month.is_some() {
+                                        edit_mode.set("anchor".to_string());
+                                        edit_due_day.set(r.due_day_of_month.unwrap().to_string());
+                                    } else {
+                                        edit_mode.set("horizon".to_string());
+                                    }
+                                    edit_urgency.set(r.urgency_lead_days.to_string());
+                                    edit_prep.set(r.prep_lead_days.to_string());
+                                    editing_rule.set(Some(r.clone()));
+                                }
+                            },
+                            "Modifier"
+                        }
+                        button {
+                            class: "secondary",
+                            style: "font-size: 0.72rem; padding: 4px 10px; color: #f87171; border-color: rgba(248,113,113,0.3); flex-shrink: 0;",
+                            onclick: {
+                                let id = rule.id;
+                                move |_| async move {
+                                    match delete_automation_rule(id).await {
+                                        Ok(_) => { bump += 1; }
+                                        Err(e) => rule_msg.set(e.to_string()),
+                                    }
+                                }
+                            },
+                            "Supprimer"
+                        }
+                    }
+                }
+                if rules.read().as_deref().unwrap_or(&[]).is_empty() {
+                    div { class: "empty-state",
+                        h3 { "Aucune règle" }
+                        p { "Clique sur “+ Nouvelle règle” pour créer ta première règle d'anticipation." }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        //  Modale : Modifier une règle
+        // ============================================================
+        if let Some(rule) = editing_rule() {
+            div {
+                class: "dash-modal-overlay",
+                onclick: move |_| editing_rule.set(None),
+                div {
+                    class: "dash-modal",
+                    style: "max-width: 560px;",
+                    onclick: move |e| e.stop_propagation(),
+
+                    div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;",
                         div {
-                            div { class:"data-title", "{p.activity_code} · {p.object_type} · {p.risk_level}" },
-                            div { class:"small", "niveau {p.automation_level} • validation {p.validation_required} • {p.enabled}" }
+                            div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;",
+                                "Modifier la règle" }
+                            h2 { style: "margin: 4px 0 0 0;", "{rule.name}" }
+                        }
+                        button {
+                            style: "background: transparent; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1;",
+                            onclick: move |_| editing_rule.set(None),
+                            "×"
+                        }
+                    }
+
+                    div { style: "font-size: 0.72rem; color: #94a3b8; margin-bottom: 16px; font-family: monospace;",
+                        "{rule.code}"
+                    }
+
+                    // Choix du mode
+                    div { style: "margin-bottom: 16px;",
+                        div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;",
+                            "Type de planification"
+                        }
+                        div { style: "display: inline-flex; background: var(--bg-input); border-radius: 8px; padding: 3px; border: 1px solid var(--border);",
+                            button {
+                                style: if edit_mode() == "anchor" {
+                                    "background: var(--accent); color: #04121f; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; font-weight: 600;"
+                                } else {
+                                    "background: transparent; color: #94a3b8; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;"
+                                },
+                                onclick: move |_| edit_mode.set("anchor".to_string()),
+                                "Jour fixe du mois"
+                            }
+                            button {
+                                style: if edit_mode() == "horizon" {
+                                    "background: var(--accent); color: #04121f; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; font-weight: 600;"
+                                } else {
+                                    "background: transparent; color: #94a3b8; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;"
+                                },
+                                onclick: move |_| edit_mode.set("horizon".to_string()),
+                                "Délai relatif"
+                            }
+                        }
+                    }
+
+                    if edit_mode() == "anchor" {
+                        div { style: "display: flex; flex-direction: column; gap: 12px;",
+                            label { class: "field",
+                                span { "Jour du mois (1-31)" }
+                                input {
+                                    r#type: "number", min: "1", max: "31",
+                                    value: "{edit_due_day}",
+                                    oninput: move |e| edit_due_day.set(e.value()),
+                                }
+                            }
+                            label { class: "field",
+                                span { "Urgent à partir de (jours avant l'échéance)" }
+                                input {
+                                    r#type: "number", min: "0", max: "90",
+                                    value: "{edit_urgency}",
+                                    oninput: move |e| edit_urgency.set(e.value()),
+                                }
+                            }
+                            label { class: "field",
+                                span { "Préparation démarre (jours avant l'échéance)" }
+                                input {
+                                    r#type: "number", min: "0", max: "180",
+                                    value: "{edit_prep}",
+                                    oninput: move |e| edit_prep.set(e.value()),
+                                }
+                            }
+                        }
+                    } else {
+                        label { class: "field",
+                            span { "Horizon (jours avant l'échéance)" }
+                            input {
+                                r#type: "number",
+                                value: "{edit_horizon}",
+                                oninput: move |e| edit_horizon.set(e.value()),
+                            }
+                        }
+                    }
+
+                    div { style: "margin-top: 12px;",
+                        label { class: "field",
+                            span { "Priorité (0-100)" }
+                            input {
+                                r#type: "number",
+                                value: "{edit_priority}",
+                                oninput: move |e| edit_priority.set(e.value()),
+                            }
+                        }
+                    }
+
+                    div { style: "display: flex; gap: 8px; margin-top: 20px;",
+                        button {
+                            class: "primary",
+                            style: "flex: 1;",
+                            onclick: {
+                                let id = rule.id;
+                                let enabled = rule.enabled;
+                                move |_| {
+                                    let h = edit_horizon().parse::<i32>().unwrap_or(30);
+                                    let p = edit_priority().parse::<i32>().unwrap_or(50);
+                                    let is_anchor = edit_mode() == "anchor";
+                                    let d = if is_anchor {
+                                        Some(edit_due_day().parse::<i16>().unwrap_or(24))
+                                    } else {
+                                        None
+                                    };
+                                    let u = edit_urgency().parse::<i16>().unwrap_or(5);
+                                    let pr = edit_prep().parse::<i16>().unwrap_or(21);
+                                    async move {
+                                        match update_automation_rule(id, h, p, enabled, d, u, pr).await {
+                                            Ok(_) => {
+                                                editing_rule.set(None);
+                                                bump += 1;
+                                            }
+                                            Err(e) => rule_msg.set(e.to_string()),
+                                        }
+                                    }
+                                }
+                            },
+                            "Enregistrer"
+                        }
+                        button {
+                            class: "secondary",
+                            onclick: move |_| editing_rule.set(None),
+                            "Annuler"
                         }
                     }
                 }
             }
         }
-        section {
-            class:"automation-grid",
-            for r in rules.read().as_deref().unwrap_or(&[]).iter() { AutomationRow { item:r.clone(), bump } }
+
+        // ============================================================
+        //  Modale : Nouvelle règle
+        // ============================================================
+        if show_add() {
+            div {
+                class: "dash-modal-overlay",
+                onclick: move |_| show_add.set(false),
+                div {
+                    class: "dash-modal",
+                    style: "max-width: 640px; max-height: 85vh; overflow-y: auto;",
+                    onclick: move |e| e.stop_propagation(),
+
+                    div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;",
+                        div {
+                            div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;",
+                                "Nouvelle règle" }
+                            h2 { style: "margin: 4px 0 0 0;", "Créer une règle d'automatisation" }
+                        }
+                        button {
+                            style: "background: transparent; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1;",
+                            onclick: move |_| show_add.set(false),
+                            "×"
+                        }
+                    }
+
+                    if !rule_msg().is_empty() {
+                        div { style: "background: #450a0a; border: 1px solid #7f1d1d; color: #fecaca; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 12px;",
+                            "{rule_msg()}"
+                        }
+                    }
+
+                    div { style: "display: flex; flex-direction: column; gap: 12px;",
+                        label { class: "field",
+                            span { "Code (identifiant unique)" }
+                            input {
+                                value: "{new_code}",
+                                oninput: move |e| new_code.set(e.value()),
+                                placeholder: "VAT_QUARTERLY, RENT_REVIEW...",
+                            }
+                        }
+                        label { class: "field",
+                            span { "Nom affiché" }
+                            input {
+                                value: "{new_name}",
+                                oninput: move |e| new_name.set(e.value()),
+                                placeholder: "Préparer la TVA mensuelle",
+                            }
+                        }
+                        label { class: "field",
+                            span { "Description" }
+                            textarea {
+                                value: "{new_desc}",
+                                oninput: move |e| new_desc.set(e.value()),
+                                placeholder: "Explication de la règle…",
+                            }
+                        }
+
+                        // Type de planification
+                        div {
+                            div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;",
+                                "Type de planification"
+                            }
+                            div { style: "display: inline-flex; background: var(--bg-input); border-radius: 8px; padding: 3px; border: 1px solid var(--border);",
+                                button {
+                                    style: if new_mode() == "anchor" {
+                                        "background: var(--accent); color: #04121f; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; font-weight: 600;"
+                                    } else {
+                                        "background: transparent; color: #94a3b8; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;"
+                                    },
+                                    onclick: move |_| new_mode.set("anchor".to_string()),
+                                    "Jour fixe du mois"
+                                }
+                                button {
+                                    style: if new_mode() == "horizon" {
+                                        "background: var(--accent); color: #04121f; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; font-weight: 600;"
+                                    } else {
+                                        "background: transparent; color: #94a3b8; border: none; padding: 6px 14px; border-radius: 6px; font-size: 0.78rem; cursor: pointer;"
+                                    },
+                                    onclick: move |_| new_mode.set("horizon".to_string()),
+                                    "Délai relatif"
+                                }
+                            }
+                        }
+
+                        if new_mode() == "anchor" {
+                            div { style: "display: flex; gap: 8px;",
+                                div { style: "flex: 1;",
+                                    label { class: "field",
+                                        span { "Jour du mois (1-31)" }
+                                        input {
+                                            r#type: "number", min: "1", max: "31",
+                                            value: "{new_due_day}",
+                                            oninput: move |e| new_due_day.set(e.value()),
+                                        }
+                                    }
+                                }
+                                div { style: "flex: 1;",
+                                    label { class: "field",
+                                        span { "Urgent J-" }
+                                        input {
+                                            r#type: "number", min: "0", max: "90",
+                                            value: "{new_urgency}",
+                                            oninput: move |e| new_urgency.set(e.value()),
+                                        }
+                                    }
+                                }
+                                div { style: "flex: 1;",
+                                    label { class: "field",
+                                        span { "Préparation J-" }
+                                        input {
+                                            r#type: "number", min: "0", max: "180",
+                                            value: "{new_prep}",
+                                            oninput: move |e| new_prep.set(e.value()),
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            label { class: "field",
+                                span { "Horizon (jours avant l'échéance)" }
+                                input {
+                                    r#type: "number",
+                                    value: "{new_horizon}",
+                                    oninput: move |e| new_horizon.set(e.value()),
+                                }
+                            }
+                        }
+
+                        div { style: "display: flex; gap: 8px;",
+                            div { style: "flex: 1;",
+                                label { class: "field",
+                                    span { "Type de déclencheur" }
+                                    select {
+                                        value: "{new_trigger}",
+                                        onchange: move |e| new_trigger.set(e.value()),
+                                        option { value: "DATE", "Date (échéance)" }
+                                        option { value: "RECURRING", "Récurrent (périodique)" }
+                                        option { value: "EVENT", "Événement métier" }
+                                    }
+                                }
+                            }
+                            div { style: "flex: 1;",
+                                label { class: "field",
+                                    span { "Priorité (0-100)" }
+                                    input {
+                                        r#type: "number",
+                                        value: "{new_priority}",
+                                        oninput: move |e| new_priority.set(e.value()),
+                                    }
+                                }
+                            }
+                        }
+
+                        label { style: "display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #94a3b8;",
+                            input {
+                                r#type: "checkbox",
+                                checked: new_auto_exec(),
+                                onchange: move |e| new_auto_exec.set(e.value() == "true"),
+                            }
+                            "Exécution automatique (sans validation)"
+                        }
+                    }
+
+                    div { style: "display: flex; gap: 8px; margin-top: 20px;",
+                        button {
+                            class: "primary",
+                            style: "flex: 1;",
+                            onclick: move |_| {
+                                let code = new_code();
+                                let name = new_name();
+                                let desc = new_desc();
+                                let trigger = new_trigger();
+                                let h = new_horizon().parse::<i32>().unwrap_or(30);
+                                let p = new_priority().parse::<i32>().unwrap_or(50);
+                                let auto_exec = new_auto_exec();
+                                let is_anchor = new_mode() == "anchor";
+                                let d = if is_anchor {
+                                    Some(new_due_day().parse::<i16>().unwrap_or(24))
+                                } else {
+                                    None
+                                };
+                                let u = new_urgency().parse::<i16>().unwrap_or(5);
+                                let pr = new_prep().parse::<i16>().unwrap_or(21);
+                                async move {
+                                    match create_automation_rule_full(
+                                        code, name, desc, trigger, h, p, auto_exec, d, u, pr,
+                                    )
+                                    .await
+                                    {
+                                        Ok(_) => {
+                                            show_add.set(false);
+                                            rule_msg.set(String::new());
+                                            bump += 1;
+                                        }
+                                        Err(e) => rule_msg.set(e.to_string()),
+                                    }
+                                }
+                            },
+                            "Créer la règle"
+                        }
+                        button {
+                            class: "secondary",
+                            onclick: move |_| show_add.set(false),
+                            "Annuler"
+                        }
+                    }
+                }
+            }
         }
     }
 }
-
 #[component]
 fn TasksPage(refresh: Signal<u64>) -> Element {
     let mut bump = use_signal(|| 0u64);
@@ -1259,7 +1981,127 @@ fn TasksPage(refresh: Signal<u64>) -> Element {
         let _ = bump();
         async move { list_tasks().await.unwrap_or_default() }
     });
-    rsx! {ModuleHeader{title:"Tâches",kicker:"WORKFLOW • ÉTATS • BLOQUANTS",detail:"Toute action administrative peut être suivie jusqu’à sa clôture."}section {class:"panel",div {for t in tasks.read().as_deref().unwrap_or(&[]).iter(){TaskManagerRow{item:t.clone(),bump}}}}}
+
+    let mut show_add = use_signal(|| false);
+    let mut new_title = use_signal(String::new);
+    let mut new_desc = use_signal(String::new);
+    let mut new_due = use_signal(|| (Utc::now().date_naive() + Duration::days(30)).to_string());
+    let mut msg = use_signal(String::new);
+
+    rsx! {
+        ModuleHeader {
+            title: "Tâches",
+            kicker: "WORKFLOW • ÉTATS • BLOQUANTS",
+            detail: "Toute action administrative peut être suivie jusqu'à sa clôture."
+        }
+
+        // Barre d'actions
+        section {
+            class: "panel",
+            div { style:"display: flex; justify-content: space-between; align-items: center; gap: 12px;",
+                div {
+                    span { class:"small",
+                        {format!("{} tâche(s)", tasks.read().as_deref().unwrap_or(&[]).len())} }
+                }
+                button {
+                    class:"primary",
+                    onclick: move |_| show_add.set(true),
+                    "+ Ajouter une tâche"
+                }
+            }
+        }
+
+        // Liste
+        section {
+            class:"panel",
+            if !msg().is_empty() {
+                div { style:"color: #f87171; font-size: 0.8rem; margin-bottom: 8px;", "{msg}" }
+            }
+            div { style:"display: flex; flex-direction: column; gap: 8px;",
+                for t in tasks.read().as_deref().unwrap_or(&[]).iter().cloned() {
+                    crate::ui::dashboard::tasks::TaskManagerRow {
+                        item: t.clone(),
+                        bump: bump,
+                    }
+                }
+                if tasks.read().as_deref().unwrap_or(&[]).is_empty() {
+                    div { class:"empty-state",
+                        h3 { "Aucune tâche" }
+                        p { "Clique sur “+ Ajouter une tâche” pour en créer une, ou lance le cycle d'anticipation." }
+                    }
+                }
+            }
+        }
+
+        // Modale ajout
+        if show_add() {
+            div {
+                class: "dash-modal-overlay",
+                onclick: move |_| show_add.set(false),
+                div {
+                    class: "dash-modal",
+                    onclick: move |e| e.stop_propagation(),
+                    h2 { "Nouvelle tâche" }
+                    div { style:"display: flex; flex-direction: column; gap: 12px; margin-top: 16px;",
+                        label { class:"field",
+                            span { "Titre" }
+                            input {
+                                value: "{new_title}",
+                                oninput: move |e| new_title.set(e.value()),
+                                placeholder: "Ex: Appeler le comptable",
+                            }
+                        }
+                        label { class:"field",
+                            span { "Description" }
+                            textarea {
+                                value: "{new_desc}",
+                                oninput: move |e| new_desc.set(e.value()),
+                                placeholder: "Détails optionnels…",
+                            }
+                        }
+                        label { class:"field",
+                            span { "Échéance (AAAA-MM-JJ)" }
+                            input {
+                                value: "{new_due}",
+                                oninput: move |e| new_due.set(e.value()),
+                            }
+                        }
+                    }
+                    div { style:"display: flex; gap: 8px; margin-top: 20px;",
+                        button {
+                            class:"primary",
+                            onclick: move |_| {
+                                let title = new_title();
+                                let desc = new_desc();
+                                let due_str = new_due();
+                                async move {
+                                    let Ok(due) = NaiveDate::parse_from_str(&due_str, "%Y-%m-%d") else {
+                                        msg.set("Date invalide".into());
+                                        return;
+                                    };
+                                    match create_manual_task(title, desc, due).await {
+                                        Ok(_) => {
+                                            new_title.set(String::new());
+                                            new_desc.set(String::new());
+                                            show_add.set(false);
+                                            bump += 1;
+                                        }
+                                        Err(e) => msg.set(e.to_string()),
+                                    }
+                                }
+                            },
+                            "Créer"
+                        }
+                        button {
+                            class:"secondary",
+                            onclick: move |_| show_add.set(false),
+                            "Annuler"
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[component]
@@ -1570,32 +2412,6 @@ fn AutomationRow(item: AutomationRuleItem, mut bump: Signal<u64>) -> Element {
 }
 
 #[component]
-fn TaskManagerRow(item: TaskItem, mut bump: Signal<u64>) -> Element {
-    let id = item.id;
-    let v = task_state_value(&item.state).to_string();
-    rsx! {
-        div {
-            class: "data-row",
-            div {
-                div { class: "data-title", "{item.title}" }
-                div { class: "small", "{item.description}" }
-                div { class: "small", {item.due_at.format("%d/%m/%Y %H:%M").to_string()} }
-            }
-            select {
-                value: v,
-                onchange: move |e: FormEvent| async move { let _ = set_task_state(id, e.value()).await; bump += 1; },
-                option { value: "PLANNED", "Planifiée" }
-                option { value: "READY", "Prête" }
-                option { value: "RUNNING", "En cours" }
-                option { value: "BLOCKED", "Bloquée" }
-                option { value: "DONE", "Terminée" }
-                option { value: "SKIPPED", "Ignorée" }
-            }
-        }
-    }
-}
-
-#[component]
 fn TaskRow(task: TaskItem) -> Element {
     rsx! {
         div {
@@ -1748,5 +2564,3 @@ fn task_state_value(v: &TaskState) -> &'static str {
         TaskState::Skipped => "SKIPPED",
     }
 }
-
-

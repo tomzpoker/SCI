@@ -20,7 +20,17 @@ fn main() {
             );
 
             tokio::spawn(async move {
+                // Premier passage immédiat au démarrage
+                if let Err(error) = server::automation_tick(pool).await {
+                    observability::record_error(
+                        LogDomain::Automation,
+                        &error,
+                        "automation cycle failed at startup",
+                    );
+                }
+                // Puis une fois par jour (24h)
                 loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
                     if let Err(error) = server::automation_tick(pool).await {
                         observability::record_error(
                             LogDomain::Automation,
@@ -28,8 +38,6 @@ fn main() {
                             "automation cycle failed",
                         );
                     }
-
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 }
             });
 

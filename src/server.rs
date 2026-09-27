@@ -1290,7 +1290,17 @@ pub async fn list_automation_rules() -> Result<Vec<AutomationRuleItem>, ServerFn
     #[cfg(feature = "server")]
     {
         let pool = db().await.map_err(ServerFnError::new)?;
-        let rows=sqlx::query("SELECT id,code,name,description,trigger_kind,horizon_days,priority,auto_execute,enabled FROM automation_rules WHERE legal_entity_id=$1 ORDER BY priority DESC,name").bind(current_legal_entity_id()).fetch_all(pool).await.map_err(ServerFnError::new)?;
+        let rows = sqlx::query(
+            "SELECT id, code, name, description, trigger_kind, horizon_days, priority, \
+                    auto_execute, enabled, due_day_of_month, urgency_lead_days, prep_lead_days \
+             FROM automation_rules \
+             WHERE legal_entity_id=$1 \
+             ORDER BY priority DESC, name",
+        )
+        .bind(current_legal_entity_id())
+        .fetch_all(pool)
+        .await
+        .map_err(ServerFnError::new)?;
         Ok(rows
             .into_iter()
             .map(|r| AutomationRuleItem {
@@ -1303,6 +1313,9 @@ pub async fn list_automation_rules() -> Result<Vec<AutomationRuleItem>, ServerFn
                 priority: r.get("priority"),
                 auto_execute: r.get("auto_execute"),
                 enabled: r.get("enabled"),
+                due_day_of_month: r.try_get("due_day_of_month").ok().flatten(),
+                urgency_lead_days: r.try_get::<i16, _>("urgency_lead_days").unwrap_or(5),
+                prep_lead_days: r.try_get::<i16, _>("prep_lead_days").unwrap_or(21),
             })
             .collect())
     }
@@ -1405,7 +1418,9 @@ pub async fn run_anticipation_cycle() -> Result<AutomationRunResult, ServerFnErr
     #[cfg(feature = "server")]
     {
         let pool = db().await.map_err(ServerFnError::new)?;
-        automation_tick(pool).await.map_err(ServerFnError::new)
+        automation_tick_force(pool)
+            .await
+            .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new(
@@ -1415,15 +1430,44 @@ pub async fn run_anticipation_cycle() -> Result<AutomationRunResult, ServerFnErr
 
 #[cfg(feature = "server")]
 pub async fn automation_tick(pool: &sqlx::PgPool) -> Result<AutomationRunResult, sqlx::Error> {
+    automation_tick_with(pool, false).await
+}
+
+#[cfg(feature = "server")]
+pub async fn automation_tick_force(pool: &sqlx::PgPool) -> Result<AutomationRunResult, sqlx::Error> {
+    automation_tick_with(pool, true).await
+}
+
+#[cfg(feature = "server")]
+async fn automation_tick_with(
+    pool: &sqlx::PgPool,
+    force: bool,
+) -> Result<AutomationRunResult, sqlx::Error> {
     let context = load_engine_context(pool, current_legal_entity_id()).await?;
     let id = context.legal_entity_id;
     let now = Utc::now();
     let job_payload = serde_json::json!({"run_date": now.date_naive(), "entity_id": id});
-    let claim = claim_job(pool, id, "ANTICIPATION_CYCLE", &format!("{}", now.date_naive()), &job_payload).await?;
-    if !claim.execute {
-        return Ok(AutomationRunResult { created_tasks: 0, evaluated_rules: 0, ran_at: now });
+
+    let mut claim_id: Option<uuid::Uuid> = None;
+    if !force {
+        let claim = claim_job(
+            pool,
+            id,
+            "ANTICIPATION_CYCLE",
+            &format!("{}", now.date_naive()),
+            &job_payload,
+        )
+        .await?;
+        if !claim.execute {
+            return Ok(AutomationRunResult {
+                created_tasks: 0,
+                evaluated_rules: 0,
+                ran_at: now,
+            });
+        }
+        claim_id = Some(claim.id);
     }
-    let rules=sqlx::query("SELECT id,code,name,horizon_days,priority FROM automation_rules WHERE legal_entity_id=$1 AND enabled=true").bind(id).fetch_all(pool).await?;
+    let rules=sqlx::query("SELECT id,code,name,horizon_days,priority,due_day_of_month,prep_lead_days FROM automation_rules WHERE legal_entity_id=$1 AND enabled=true").bind(id).fetch_all(pool).await?;
     let mut created = 0usize;
     for r in &rules {
         let rid: Uuid = r.get("id");
@@ -1431,10 +1475,111 @@ pub async fn automation_tick(pool: &sqlx::PgPool) -> Result<AutomationRunResult,
         let name: String = r.get("name");
         let horizon: i32 = r.get("horizon_days");
         let priority: i32 = r.get("priority");
-        let due_date = (now + Duration::days(i64::from(horizon.clamp(1, 365)))).date_naive();
+        let due_day: Option<i16> = r.try_get("due_day_of_month").ok().flatten();
+        let prep_lead: i16 = r.try_get("prep_lead_days").unwrap_or(21);
+
+        let today = now.date_naive();
+
+        // --- Calcul de l'echeance ---
+        // ANNUAL_CLOSE : ancrage legal au 1er mars.
+        // VAT_COLLECTION : jour fixe du mois (24 par defaut).
+        // Sinon : ancien systeme horizon.
+        let effective_due_day: Option<i16> = due_day.or_else(|| {
+            match code.as_str() {
+                "VAT_COLLECTION" => Some(24),
+                _ => None,
+            }
+        });
+
+        let due_date = if code == "ANNUAL_CLOSE" {
+            let y = today.year();
+            let march_first = chrono::NaiveDate::from_ymd_opt(y, 3, 1).unwrap_or(today);
+            if today < march_first {
+                march_first
+            } else {
+                chrono::NaiveDate::from_ymd_opt(y + 1, 3, 1).unwrap_or(today)
+            }
+        } else if let Some(d) = effective_due_day {
+            let day = (d as u32).clamp(1, 28);
+            chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), day).unwrap_or(today)
+        } else {
+            (now + Duration::days(i64::from(horizon.clamp(1, 365)))).date_naive()
+        };
         let due = due_date.and_hms_opt(9, 0, 0).unwrap().and_utc();
-        let key = due_date.to_string();
-        let x=sqlx::query("INSERT INTO tasks(legal_entity_id,automation_rule_id,code,title,description,due_at,state,priority,source,occurrence_key,blocking) VALUES($1,$2,$3,$4,$5,$6,'READY',$7,'AUTOMATION',$8,false) ON CONFLICT(legal_entity_id,code,occurrence_key) DO NOTHING").bind(id).bind(rid).bind(&code).bind(&name).bind("Préparée automatiquement par le moteur d'anticipation.").bind(due).bind(priority).bind(&key).execute(pool).await?;
+
+        // --- Etat initial selon la proximite de l'echeance ---
+        // Si l'echeance est au-dela de prep_lead_days, la tache est PLANNED (pas urgente).
+        // Sinon elle est READY (a traiter).
+        let days_until_due = (due_date - today).num_days();
+        let initial_state = if days_until_due <= i64::from(prep_lead) {
+            "READY"
+        } else {
+            "PLANNED"
+        };
+
+        // --- Titre et description dynamiques ---
+        let (title, description) = if code == "VAT_COLLECTION" {
+            let (prev_month, prev_year) = if today.month() == 1 {
+                (12u32, today.year() - 1)
+            } else {
+                (today.month() - 1, today.year())
+            };
+            let month_name = match prev_month {
+                1 => "janvier", 2 => "fevrier", 3 => "mars", 4 => "avril",
+                5 => "mai", 6 => "juin", 7 => "juillet", 8 => "aout",
+                9 => "septembre", 10 => "octobre", 11 => "novembre", 12 => "decembre",
+                _ => "?",
+            };
+            (
+                format!("Declarer la TVA de {} {}", month_name, prev_year),
+                format!("Declaration TVA du mois precedent. A preparer avant le {} {}.",
+                    due_date.day(), match due_date.month() {
+                        1 => "janvier", 2 => "fevrier", 3 => "mars", 4 => "avril",
+                        5 => "mai", 6 => "juin", 7 => "juillet", 8 => "aout",
+                        9 => "septembre", 10 => "octobre", 11 => "novembre", 12 => "decembre",
+                        _ => "",
+                    }),
+            )
+        } else if code == "ANNUAL_CLOSE" {
+            let exercice_clos = due_date.year() - 1;
+            (
+                format!("Preparer la cloture de l'exercice {}", exercice_clos),
+                format!(
+                    "Comptes annuels de l'exercice {} a deposer avant le 1er mars {}. Preparer les pieces justificatives, la liasse fiscale et les PV d'assemblee.",
+                    exercice_clos,
+                    due_date.year()
+                ),
+            )
+        } else {
+            (name.clone(), "Preparee automatiquement par le moteur d'anticipation.".to_string())
+        };
+
+        // --- Cle d'occurrence : stable pour eviter les doublons ---
+        // Le mois courant suffit : une seule occurrence par regle et par mois.
+        let key = now.format("%Y-%m").to_string();
+
+        // --- UPSERT : on met a jour si la tache existe deja (sauf si DONE/SKIPPED) ---
+        let x = sqlx::query(
+            "INSERT INTO tasks(legal_entity_id,automation_rule_id,code,title,description,due_at,state,priority,source,occurrence_key,blocking) \
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,'AUTOMATION',$9,false) \
+             ON CONFLICT(legal_entity_id,code,occurrence_key) DO UPDATE SET \
+                title = EXCLUDED.title, \
+                description = EXCLUDED.description, \
+                due_at = EXCLUDED.due_at, \
+                state = EXCLUDED.state \
+             WHERE tasks.state NOT IN ('DONE','SKIPPED')"
+        )
+            .bind(id)
+            .bind(rid)
+            .bind(&code)
+            .bind(&title)
+            .bind(&description)
+            .bind(due)
+            .bind(initial_state)
+            .bind(priority)
+            .bind(&key)
+            .execute(pool)
+            .await?;
         created += x.rows_affected() as usize;
     }
     let deadline_rows=sqlx::query("SELECT id,code,label,deadline_date FROM tax_deadlines WHERE legal_entity_id=$1 AND status<>'DONE' AND deadline_date BETWEEN CURRENT_DATE AND CURRENT_DATE+60").bind(id).fetch_all(pool).await?;
@@ -1445,7 +1590,7 @@ pub async fn automation_tick(pool: &sqlx::PgPool) -> Result<AutomationRunResult,
         let date: NaiveDate = r.get("deadline_date");
         let due = date.and_hms_opt(9, 0, 0).unwrap().and_utc();
         let key = format!("deadline:{}", did);
-        let x=sqlx::query("INSERT INTO tasks(legal_entity_id,code,title,description,due_at,state,priority,source,occurrence_key,blocking) VALUES($1,$2,$3,$4,$5,'READY',100,'CALENDAR',$6,true) ON CONFLICT(legal_entity_id,code,occurrence_key) DO NOTHING").bind(id).bind(format!("DEADLINE_{}",code)).bind(label).bind("Échéance déclarative : préparer les pièces et le contrôle avant la date limite.").bind(due).bind(key).execute(pool).await?;
+        let x=sqlx::query("INSERT INTO tasks(legal_entity_id,code,title,description,due_at,state,priority,source,occurrence_key,blocking) VALUES($1,$2,$3,$4,$5,'READY',100,'CALENDAR',$6,true) ON CONFLICT(legal_entity_id,code,occurrence_key) DO NOTHING").bind(id).bind(format!("DEADLINE_{}",code)).bind(label).bind("Echeance declarative : preparer les pieces et le controle avant la date limite.").bind(due).bind(key).execute(pool).await?;
         created += x.rows_affected() as usize;
     }
     audit(
@@ -1453,10 +1598,19 @@ pub async fn automation_tick(pool: &sqlx::PgPool) -> Result<AutomationRunResult,
         "ANTICIPATION_CYCLE",
         None,
         None,
-        serde_json::json!({"created_tasks":created,"evaluated_rules":rules.len()}),
+        serde_json::json!({"created_tasks":created,"evaluated_rules":rules.len(),"force":force}),
     )
     .await?;
-    complete_job(pool,claim.id,&serde_json::json!({"created_tasks":created,"evaluated_rules":rules.len()})).await?;
+
+    if let Some(cid) = claim_id {
+        complete_job(
+            pool,
+            cid,
+            &serde_json::json!({"created_tasks": created, "evaluated_rules": rules.len()}),
+        )
+        .await?;
+    }
+
     Ok(AutomationRunResult {
         created_tasks: created,
         evaluated_rules: rules.len(),
@@ -1539,7 +1693,7 @@ async fn list_tasks_inner(
     id: Uuid,
     limit: i64,
 ) -> Result<Vec<TaskItem>, sqlx::Error> {
-    let rows=sqlx::query("SELECT id,code,title,COALESCE(description,'') AS description,due_at,state,priority,blocking FROM tasks WHERE legal_entity_id=$1 ORDER BY CASE state WHEN 'BLOCKED' THEN 0 WHEN 'READY' THEN 1 ELSE 2 END,priority DESC,due_at LIMIT $2").bind(id).bind(limit).fetch_all(pool).await?;
+    let rows=sqlx::query("SELECT id,code,title,COALESCE(description,'') AS description,due_at,state,priority,blocking FROM tasks WHERE legal_entity_id=$1 ORDER BY CASE WHEN state IN ('DONE','SKIPPED') THEN 1 ELSE 0 END, due_at ASC, priority DESC LIMIT $2").bind(id).bind(limit).fetch_all(pool).await?;
     Ok(rows
         .into_iter()
         .map(|r| TaskItem {
@@ -1676,3 +1830,272 @@ fn task_state(v: String) -> TaskState {
     }
 }
 
+#[server]
+pub async fn update_automation_rule(
+    id: Uuid,
+    horizon_days: i32,
+    priority: i32,
+    enabled: bool,
+    due_day_of_month: Option<i16>,
+    urgency_lead_days: i16,
+    prep_lead_days: i16,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        let r = sqlx::query(
+            "UPDATE automation_rules SET horizon_days=$3, priority=$4, enabled=$5, \
+                due_day_of_month=$6, urgency_lead_days=$7, prep_lead_days=$8, updated_at=now() \
+             WHERE id=$1 AND legal_entity_id=$2",
+        )
+        .bind(id)
+        .bind(current_legal_entity_id())
+        .bind(horizon_days.clamp(1, 3650))
+        .bind(priority)
+        .bind(enabled)
+        .bind(due_day_of_month)
+        .bind(urgency_lead_days.clamp(0, 90))
+        .bind(prep_lead_days.clamp(0, 180))
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        if r.rows_affected() == 0 {
+            return Err(ServerFnError::new("Règle introuvable"));
+        }
+        audit(
+            pool,
+            "UPDATE_AUTOMATION_RULE",
+            Some("automation_rule"),
+            Some(id),
+            serde_json::json!({"horizon_days": horizon_days, "priority": priority, "enabled": enabled}),
+        )
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "update_automation_rule est exécutée côté serveur",
+    ))
+}
+
+#[server]
+pub async fn create_manual_task(
+    title: String,
+    description: String,
+    due_at: NaiveDate,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        if title.trim().is_empty() {
+            return Err(ServerFnError::new("Titre requis"));
+        }
+        let due = due_at.and_hms_opt(9, 0, 0).unwrap().and_utc();
+        let entity = current_legal_entity_id();
+        // Clé unique basée sur le timestamp pour éviter la déduplication
+        let key = format!("manual-{}", Utc::now().timestamp_millis());
+        let code = format!("MANUAL_{}", Utc::now().timestamp_millis());
+        sqlx::query(
+            "INSERT INTO tasks(legal_entity_id,code,title,description,due_at,state,priority,source,occurrence_key,blocking) \
+             VALUES($1,$2,$3,$4,$5,'READY',50,'MANUAL',$6,false)",
+        )
+        .bind(entity)
+        .bind(&code)
+        .bind(title.trim())
+        .bind(description.trim())
+        .bind(due)
+        .bind(&key)
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        audit(
+            pool,
+            "CREATE_MANUAL_TASK",
+            None,
+            None,
+            serde_json::json!({"title": title}),
+        )
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "create_manual_task est exécutée côté serveur",
+    ))
+}
+
+#[server]
+pub async fn delete_task(id: Uuid) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        let r = sqlx::query("DELETE FROM tasks WHERE id=$1 AND legal_entity_id=$2")
+            .bind(id)
+            .bind(current_legal_entity_id())
+            .execute(pool)
+            .await
+            .map_err(ServerFnError::new)?;
+        if r.rows_affected() == 0 {
+            return Err(ServerFnError::new("Tâche introuvable"));
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "delete_task est exécutée côté serveur",
+    ))
+}
+
+#[server]
+pub async fn update_task(
+    id: Uuid,
+    title: String,
+    description: String,
+    due_at: NaiveDate,
+    priority: i32,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        if title.trim().is_empty() {
+            return Err(ServerFnError::new("Titre requis"));
+        }
+        let due = due_at
+            .and_hms_opt(9, 0, 0)
+            .ok_or_else(|| ServerFnError::new("Date invalide"))?
+            .and_utc();
+        let r = sqlx::query(
+            "UPDATE tasks SET title=$3, description=$4, due_at=$5, priority=$6 \
+             WHERE id=$1 AND legal_entity_id=$2",
+        )
+        .bind(id)
+        .bind(current_legal_entity_id())
+        .bind(title.trim())
+        .bind(description.trim())
+        .bind(due)
+        .bind(priority.clamp(0, 100))
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        if r.rows_affected() == 0 {
+            return Err(ServerFnError::new("Tâche introuvable"));
+        }
+        audit(
+            pool,
+            "UPDATE_TASK",
+            Some("task"),
+            Some(id),
+            serde_json::json!({"title": title}),
+        )
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("update_task est exécutée côté serveur"))
+}
+
+#[server]
+pub async fn delete_automation_rule(id: Uuid) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        let r = sqlx::query(
+            "DELETE FROM automation_rules WHERE id=$1 AND legal_entity_id=$2",
+        )
+        .bind(id)
+        .bind(current_legal_entity_id())
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        if r.rows_affected() == 0 {
+            return Err(ServerFnError::new("Règle introuvable"));
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "delete_automation_rule est exécutée côté serveur",
+    ))
+}
+
+#[server]
+pub async fn create_automation_rule_full(
+    code: String,
+    name: String,
+    description: String,
+    trigger_kind: String,
+    horizon_days: i32,
+    priority: i32,
+    auto_execute: bool,
+    due_day_of_month: Option<i16>,
+    urgency_lead_days: i16,
+    prep_lead_days: i16,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        let entity = current_legal_entity_id();
+
+        let code_clean = code.trim().to_uppercase().replace(' ', "_");
+        if code_clean.is_empty() {
+            return Err(ServerFnError::new("Code requis"));
+        }
+        if name.trim().is_empty() {
+            return Err(ServerFnError::new("Nom requis"));
+        }
+
+        // Vérifie que le code n'existe pas déjà pour cette entité
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM automation_rules WHERE legal_entity_id=$1 AND code=$2)",
+        )
+        .bind(entity)
+        .bind(&code_clean)
+        .fetch_one(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        if exists {
+            return Err(ServerFnError::new(format!(
+                "Une règle avec le code {} existe déjà",
+                code_clean
+            )));
+        }
+
+        sqlx::query(
+            "INSERT INTO automation_rules(legal_entity_id, code, name, description, trigger_kind, horizon_days, priority, auto_execute, enabled, due_day_of_month, urgency_lead_days, prep_lead_days) \
+             VALUES($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $11)",
+        )
+        .bind(entity)
+        .bind(&code_clean)
+        .bind(name.trim())
+        .bind(description.trim())
+        .bind(if trigger_kind.trim().is_empty() { "DATE" } else { trigger_kind.trim() })
+        .bind(horizon_days.clamp(1, 3650))
+        .bind(priority.clamp(0, 100))
+        .bind(auto_execute)
+        .bind(due_day_of_month)
+        .bind(urgency_lead_days.clamp(0, 90))
+        .bind(prep_lead_days.clamp(0, 180))
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+
+        audit(
+            pool,
+            "CREATE_AUTOMATION_RULE",
+            Some("automation_rule"),
+            None,
+            serde_json::json!({"code": code_clean, "name": name}),
+        )
+        .await
+        .map_err(ServerFnError::new)?;
+
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "create_automation_rule est exécutée côté serveur",
+    ))
+}

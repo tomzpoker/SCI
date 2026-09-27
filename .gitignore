@@ -1,21 +1,61 @@
+# --- Rust ---
 /target
+**/*.rs.bk
+
+# --- Secrets ---
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- OS / IDE ---
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Logs ---
 *.log
-/.sci-inbox/
+logs/
+
+# --- Backups / échanges ---
 server_full.txt
 src/ui.rs.mojibake-backup
 tests/integration/modules_12.rs.bak
+*.bak
+*.old
+*.orig
+*.tmp
+*.swp
 
-# Runtime/local data — never commit
+# --- Runtime/local data ---
 .env.local
 .env.production
 .env.*.local
-!.env.example
 snapshots/
-*.dump
-*.sqlite
-*.sqlite3
 data/real/
 documents_real/
 exports/
+
+# --- Dolibarr runtime & données sensibles ---
+conf.php
+htdocs/conf/
+custom/
+/documents/
+dolibarr_data/
+dolibarr_docs/
+
+# --- Volumes Docker ---
+db_data/
+mysql_data/
+mariadb_data/
+
+# --- Dumps BDD UNIQUEMENT (pas les migrations !) ---
+dumps/
+backups/
+db_backup/
+*.dump
+*.sql.gz
+dump_*.sql
+backup_*.sql

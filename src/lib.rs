@@ -22,17 +22,13 @@ pub mod treasury;
 pub mod services;
 pub mod cash;
 pub mod workflow;
-
 pub mod leases;
-
 pub mod fiscal;
 pub mod collections;
 pub mod generation;
-
 pub mod einvoice;
-
 pub mod ux;
-
 pub mod security;
-
 pub mod business_profiles;
+pub mod prevision;
+pub mod dolibarr;
