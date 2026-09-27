@@ -142,3 +142,41 @@ pub struct DolibarrPayment {
     #[serde(default, deserialize_with = "null_to_default")]
     pub num_paiement: String,
 }
+/// Ligne de facture Dolibarr (utilisÃ©e en crÃ©ation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DolibarrInvoiceLine {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub desc: String,
+
+    #[serde(default = "default_qty")]
+    pub qty: f64,
+
+    #[serde(default)]
+    pub subprice: f64,
+
+    #[serde(default)]
+    pub tva_tx: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_type: Option<i32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fk_product: Option<i64>,
+}
+
+fn default_qty() -> f64 {
+    1.0
+}
+
+impl DolibarrInvoiceLine {
+    pub fn new(desc: impl Into<String>, qty: f64, subprice: f64, tva_tx: f64) -> Self {
+        Self {
+            desc: desc.into(),
+            qty,
+            subprice,
+            tva_tx,
+            product_type: Some(1),
+            fk_product: None,
+        }
+    }
+}
