@@ -1,5 +1,8 @@
 use dioxus::prelude::*;
-use crate::dolibarr::models::{DolibarrInvoice, DolibarrPayment, DolibarrThirdParty};
+use crate::dolibarr::models::{
+    DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrInvoice,
+    DolibarrPayment, DolibarrThirdParty,
+};
 
 #[server]
 pub async fn dolibarr_list_invoices(limit: u32) -> Result<Vec<DolibarrInvoice>, ServerFnError> {
@@ -41,8 +44,6 @@ pub async fn dolibarr_list_invoice_payments(
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_list_invoice_payments est executee cote serveur"))
 }
-
-// Factures (creation + validation + lignes)
 
 #[server]
 pub async fn dolibarr_create_invoice(
@@ -95,8 +96,6 @@ pub async fn dolibarr_get_invoice_lines(
     Err(ServerFnError::new("dolibarr_get_invoice_lines est executee cote serveur"))
 }
 
-// Paiements
-
 #[server]
 pub async fn dolibarr_create_payment(
     invoice_id: String,
@@ -117,8 +116,6 @@ pub async fn dolibarr_create_payment(
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_create_payment est executee cote serveur"))
 }
-
-// Tiers (creation, mise a jour, suppression)
 
 #[server]
 pub async fn dolibarr_create_third_party(
@@ -178,4 +175,60 @@ pub async fn dolibarr_delete_third_party(id: String) -> Result<(), ServerFnError
     }
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_delete_third_party est executee cote serveur"))
+}
+
+#[server]
+pub async fn dolibarr_list_bank_accounts() -> Result<Vec<DolibarrBankAccount>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let client = crate::dolibarr::client::DolibarrClient::from_env()
+            .map_err(ServerFnError::new)?;
+        client.list_bank_accounts().await.map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_list_bank_accounts est executee cote serveur"))
+}
+
+#[server]
+pub async fn dolibarr_list_bank_lines(
+    account_id: String,
+) -> Result<Vec<DolibarrBankLine>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let client = crate::dolibarr::client::DolibarrClient::from_env()
+            .map_err(ServerFnError::new)?;
+        client.list_bank_lines(&account_id).await.map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_list_bank_lines est executee cote serveur"))
+}
+
+#[server]
+pub async fn dolibarr_create_bank_line(
+    account_id: String,
+    dateo: i64,
+    amount: f64,
+    label: String,
+    line_type: String,
+    num_releve: String,
+) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let client = crate::dolibarr::client::DolibarrClient::from_env()
+            .map_err(ServerFnError::new)?;
+        let draft = DolibarrBankLineDraft {
+            date: dateo,
+            datev: dateo,
+            amount,
+            label,
+            line_type,
+            num_releve,
+        };
+        client
+            .create_bank_line(&account_id, &draft)
+            .await
+            .map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_create_bank_line est executee cote serveur"))
 }

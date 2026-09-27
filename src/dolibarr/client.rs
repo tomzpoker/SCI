@@ -1,5 +1,6 @@
 use crate::dolibarr::models::{
-    DolibarrInvoice, DolibarrInvoiceLine, DolibarrPayment, DolibarrThirdParty,
+    DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrInvoice,
+    DolibarrInvoiceLine, DolibarrPayment, DolibarrThirdParty,
 };
 
 #[cfg(feature = "server")]
@@ -26,6 +27,10 @@ impl DolibarrClient {
                 .map_err(|e| e.to_string())?,
         })
     }
+
+    // ------------------------------------------------------------------------
+    //  Helpers HTTP
+    // ------------------------------------------------------------------------
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let url = format!("{}/api/index.php/{}", self.base_url, path);
@@ -99,11 +104,6 @@ impl DolibarrClient {
         resp.json::<T>().await.map_err(|e| format!("JSON error: {e}"))
     }
 
-    /// Dolibarr peut renvoyer un ID sous plusieurs formes :
-    ///   - un nombre : 3
-    ///   - une string numerique : "3"
-    ///   - un objet : {"id": "3"}
-    ///   - un tableau : [{"id": "3"}]
     fn extract_id(resp: &serde_json::Value) -> Option<String> {
         if let Some(n) = resp.as_i64() {
             return Some(n.to_string());
@@ -140,7 +140,36 @@ impl DolibarrClient {
         None
     }
 
-    // FACTURES - lecture
+    /// Convertit une valeur JSON (string, number, null) en String.
+    fn json_to_string(v: Option<&serde_json::Value>) -> String {
+        match v {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Number(n)) => n.to_string(),
+            Some(serde_json::Value::Bool(b)) => b.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// Convertit une valeur JSON (string, number, null) en i64.
+    fn json_to_i64(v: Option<&serde_json::Value>) -> i64 {
+        match v {
+            Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
+            Some(serde_json::Value::String(s)) => {
+                if s.is_empty() {
+                    0
+                } else {
+                    s.parse::<i64>().unwrap_or_else(|_| {
+                        s.parse::<f64>().map(|f| f as i64).unwrap_or(0)
+                    })
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    //  FACTURES - lecture
+    // ------------------------------------------------------------------------
 
     pub async fn list_invoices(&self, limit: u32) -> Result<Vec<DolibarrInvoice>, String> {
         let path = format!("invoices?limit={}&sortfield=t.datec&sortorder=DESC", limit);
@@ -155,7 +184,9 @@ impl DolibarrClient {
         self.get_json(&format!("invoices/{}/lines", id)).await
     }
 
-    // FACTURES - ecriture
+    // ------------------------------------------------------------------------
+    //  FACTURES - ecriture
+    // ------------------------------------------------------------------------
 
     pub async fn create_invoice(
         &self,
@@ -182,7 +213,9 @@ impl DolibarrClient {
         Ok(())
     }
 
-    // PAIEMENTS
+    // ------------------------------------------------------------------------
+    //  PAIEMENTS
+    // ------------------------------------------------------------------------
 
     pub async fn list_payments_for_invoice(
         &self,
@@ -192,11 +225,6 @@ impl DolibarrClient {
             .await
     }
 
-    /// Enregistre un paiement sur une facture.
-    /// - date : timestamp Unix (secondes)
-    /// - amount : montant en unites (pas en cents)
-    /// - payment_id : ID du mode de paiement Dolibarr (1=virement, 2=cheque, 3=especes...)
-    /// - account_id : ID du compte bancaire Dolibarr (obligatoire)
     pub async fn create_payment(
         &self,
         invoice_id: &str,
@@ -225,7 +253,9 @@ impl DolibarrClient {
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
-    // TIERS
+    // ------------------------------------------------------------------------
+    //  TIERS
+    // ------------------------------------------------------------------------
 
     pub async fn list_third_parties(&self, limit: u32) -> Result<Vec<DolibarrThirdParty>, String> {
         let path = format!("thirdparties?limit={}&sortfield=t.nom&sortorder=ASC", limit);
@@ -299,6 +329,118 @@ impl DolibarrClient {
 
     pub async fn delete_third_party(&self, id: &str) -> Result<(), String> {
         self.delete_json(&format!("thirdparties/{}", id)).await
+    }
+
+    // ------------------------------------------------------------------------
+    //  BANQUE
+    // ------------------------------------------------------------------------
+
+    pub async fn list_bank_accounts(&self) -> Result<Vec<DolibarrBankAccount>, String> {
+        let url = format!("{}/api/index.php/bankaccounts", self.base_url);
+        let resp = self.http
+            .get(&url)
+            .header("DOLAPIKEY", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("JSON parse error: {e}. Body: {}", &body[..body.len().min(500)]))?;
+
+        let arr = if let Some(v) = json.get("value").and_then(|v| v.as_array()) {
+            v.clone()
+        } else if let Some(v) = json.as_array() {
+            v.clone()
+        } else {
+            return Err(format!("Reponse inattendue : {}", &body[..body.len().min(500)]));
+        };
+
+        let mut result = Vec::new();
+        for item in arr {
+            result.push(Self::parse_bank_account(&item));
+        }
+        Ok(result)
+    }
+
+    fn parse_bank_account(item: &serde_json::Value) -> DolibarrBankAccount {
+        DolibarrBankAccount {
+            id: Self::json_to_string(item.get("id")),
+            r#ref: Self::json_to_string(item.get("ref")),
+            label: Self::json_to_string(item.get("label")),
+            bank: Self::json_to_string(item.get("bank")),
+            currency_code: Self::json_to_string(item.get("currency_code")),
+            iban: Self::json_to_string(item.get("iban")),
+            bic: Self::json_to_string(item.get("bic")),
+            clos: Self::json_to_i64(item.get("clos")) as i32,
+            courant: Self::json_to_i64(item.get("courant")) as i32,
+            solde: Self::json_to_i64(item.get("solde")),
+        }
+    }
+
+    pub async fn list_bank_lines(&self, account_id: &str) -> Result<Vec<DolibarrBankLine>, String> {
+        let url = format!(
+            "{}/api/index.php/bankaccounts/{}/lines",
+            self.base_url, account_id
+        );
+        let resp = self.http
+            .get(&url)
+            .header("DOLAPIKEY", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("JSON parse error: {e}. Body: {}", &body[..body.len().min(500)]))?;
+
+        let arr = if let Some(v) = json.get("value").and_then(|v| v.as_array()) {
+            v.clone()
+        } else if let Some(v) = json.as_array() {
+            v.clone()
+        } else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = Vec::new();
+        for item in arr {
+            result.push(Self::parse_bank_line(&item));
+        }
+        Ok(result)
+    }
+
+    fn parse_bank_line(item: &serde_json::Value) -> DolibarrBankLine {
+        DolibarrBankLine {
+            id: Self::json_to_string(item.get("id")),
+            dateo: Self::json_to_i64(item.get("dateo")),
+            datev: Self::json_to_i64(item.get("datev")),
+            amount: Self::json_to_string(item.get("amount")),
+            label: Self::json_to_string(item.get("label")),
+            r#type: Self::json_to_string(item.get("type")),
+            num_releve: Self::json_to_string(item.get("num_releve")),
+            rappro: Self::json_to_i64(item.get("rappro")) as i32,
+            fk_bordereau: Self::json_to_i64(item.get("fk_bordereau")) as i32,
+        }
+    }
+
+    pub async fn create_bank_line(
+        &self,
+        account_id: &str,
+        draft: &DolibarrBankLineDraft,
+    ) -> Result<String, String> {
+        let path = format!("bankaccounts/{}/lines", account_id);
+        let resp: serde_json::Value = self.post_json(&path, draft).await?;
+        Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 }
 

@@ -49,7 +49,7 @@ enum Page {
     Billing,
     EInvoice,
     Assistant,
-    Bank,
+    Bank,    BankImport,
     Treasury,
     Vat,
     Recovery,
@@ -80,7 +80,7 @@ impl Page {
             Page::Billing => "Facturation",
             Page::EInvoice => "E-facturation",
             Page::Assistant => "Assistant IA",
-            Page::Bank => "Argent",
+            Page::Bank => "Argent",            Page::BankImport => "Import bancaire",
             Page::Treasury => "Trésorerie",
             Page::Vat => "Fiscalité",
             Page::Recovery => "Impayés & recouvrement",
@@ -172,7 +172,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
             nav {
                 NavItem{page,current:Page::Dashboard}
                 NavItem{page,current:Page::Patrimony}
-                NavItem{page,current:Page::Bank}
+                NavItem{page,current:Page::Bank}                NavItem{page,current:Page::BankImport}
                 NavItem{page,current:Page::Tasks}
                 NavItem{page,current:Page::Billing}
                 NavItem{page,current:Page::Documents}
@@ -270,7 +270,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 Page::Billing=>rsx!{crate::ui::dashboard::invoices_dolibarr::InvoicesDolibarrPage{refresh}},
                 Page::EInvoice=>rsx!{EInvoicePage{refresh}},
                 Page::Assistant=>rsx!{AssistantPage{refresh}},
-                Page::Bank=>rsx!{BankManagementPage{refresh}},
+                Page::Bank=>rsx!{crate::ui::dashboard::banking_dolibarr::BankingDolibarrPage{refresh}},                Page::BankImport=>rsx!{crate::ui::dashboard::banking_import::BankingImportPage{refresh}},
                 Page::Treasury=>rsx!{TreasuryPage{refresh}},
                 Page::Vat=>rsx!{FiscalPage{refresh}},
                 Page::Recovery=>rsx!{RecoveryPage{refresh}},

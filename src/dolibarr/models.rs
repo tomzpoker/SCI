@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Convertit `null` en valeur par défaut (String vide, 0, etc.)
 fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -9,7 +8,6 @@ where
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
-/// Convertit une string numérique Dolibarr ("1") en entier (1)
 fn string_or_number<'de, D, T>(d: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -26,7 +24,6 @@ where
     match StringOrNumber::<T>::deserialize(d)? {
         StringOrNumber::String(s) => {
             if s.is_empty() {
-                // Valeur par défaut via FromStr sur "0"
                 "0".parse::<T>().map_err(serde::de::Error::custom)
             } else {
                 s.parse::<T>().map_err(serde::de::Error::custom)
@@ -36,7 +33,14 @@ where
     }
 }
 
-/// Facture Dolibarr (mapping minimal).
+fn default_qty() -> f64 {
+    1.0
+}
+
+// ============================================================
+//  FACTURES
+// ============================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DolibarrInvoice {
     pub id: String,
@@ -78,7 +82,44 @@ pub struct DolibarrInvoice {
     pub note_private: String,
 }
 
-/// Tiers Dolibarr (client, fournisseur, ou les deux).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DolibarrInvoiceLine {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub desc: String,
+
+    #[serde(default = "default_qty")]
+    pub qty: f64,
+
+    #[serde(default)]
+    pub subprice: f64,
+
+    #[serde(default)]
+    pub tva_tx: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_type: Option<i32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fk_product: Option<i64>,
+}
+
+impl DolibarrInvoiceLine {
+    pub fn new(desc: impl Into<String>, qty: f64, subprice: f64, tva_tx: f64) -> Self {
+        Self {
+            desc: desc.into(),
+            qty,
+            subprice,
+            tva_tx,
+            product_type: Some(1),
+            fk_product: None,
+        }
+    }
+}
+
+// ============================================================
+//  TIERS
+// ============================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DolibarrThirdParty {
     pub id: String,
@@ -116,16 +157,17 @@ pub struct DolibarrThirdParty {
     #[serde(default, deserialize_with = "null_to_default")]
     pub code_fournisseur: String,
 
-    /// SIREN — Dolibarr le stocke dans `idprof1`
     #[serde(default, rename = "idprof1", deserialize_with = "null_to_default")]
     pub siren: String,
 
-    /// SIRET — Dolibarr le stocke dans `idprof2`
     #[serde(default, rename = "idprof2", deserialize_with = "null_to_default")]
     pub siret: String,
 }
 
-/// Paiement Dolibarr lié à une facture.
+// ============================================================
+//  PAIEMENTS
+// ============================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DolibarrPayment {
     pub id: String,
@@ -142,41 +184,98 @@ pub struct DolibarrPayment {
     #[serde(default, deserialize_with = "null_to_default")]
     pub num_paiement: String,
 }
-/// Ligne de facture Dolibarr (utilisÃ©e en crÃ©ation).
+
+// ============================================================
+//  BANQUE
+// ============================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DolibarrInvoiceLine {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub desc: String,
+pub struct DolibarrBankAccount {
+    pub id: String,
 
-    #[serde(default = "default_qty")]
-    pub qty: f64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub r#ref: String,
 
-    #[serde(default)]
-    pub subprice: f64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub label: String,
 
-    #[serde(default)]
-    pub tva_tx: f64,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub bank: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub product_type: Option<i32>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub currency_code: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fk_product: Option<i64>,
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub iban: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub bic: String,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub clos: i32,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub courant: i32,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub solde: i64,
 }
 
-fn default_qty() -> f64 {
-    1.0
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DolibarrBankLine {
+    pub id: String,
+
+    #[serde(default)]
+    pub dateo: i64,
+
+    #[serde(default)]
+    pub datev: i64,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub amount: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub label: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub r#type: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub num_releve: String,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub rappro: i32,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub fk_bordereau: i32,
 }
 
-impl DolibarrInvoiceLine {
-    pub fn new(desc: impl Into<String>, qty: f64, subprice: f64, tva_tx: f64) -> Self {
-        Self {
-            desc: desc.into(),
-            qty,
-            subprice,
-            tva_tx,
-            product_type: Some(1),
-            fk_product: None,
-        }
-    }
+/// Ligne bancaire en cours de creation (payload POST /bankaccounts/{id}/lines).
+/// Dolibarr attend `date` (obligatoire), `datev` (valeur), `amount`, `label`, `type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DolibarrBankLineDraft {
+    pub date: i64,
+    pub datev: i64,
+    pub amount: f64,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub line_type: String,
+    #[serde(default)]
+    pub num_releve: String,
+}
+
+// ============================================================
+//  WRAPPERS
+// ============================================================
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BankAccountsWrapper {
+    #[serde(default)]
+    pub value: Vec<DolibarrBankAccount>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BankLinesWrapper {
+    #[serde(default)]
+    pub value: Vec<DolibarrBankLine>,
 }
