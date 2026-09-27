@@ -43,7 +43,7 @@ enum Page {
     Workflows,
     ValidationInbox,
     Associates,
-    Tenants,
+    Tenants,    ThirdParties,
     Patrimony,
     Rentals,
     Billing,
@@ -74,7 +74,7 @@ impl Page {
             Page::Workflows => "Workflows",
             Page::ValidationInbox => "Validations",
             Page::Associates => "Associés",
-            Page::Tenants => "Locataires",
+            Page::Tenants => "Locataires",            Page::ThirdParties => "Tiers",
             Page::Patrimony => "Biens",
             Page::Rentals => "Locations",
             Page::Billing => "Facturation",
@@ -200,7 +200,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                         class: "expert-nav-list",
 
                         NavItem{page,current:Page::ZeroSaisie}
-                        NavItem{page,current:Page::Tenants}
+                        NavItem{page,current:Page::Tenants}                        NavItem{page,current:Page::ThirdParties}
                         NavItem{page,current:Page::Calendar}
                         NavItem{page,current:Page::Treasury}
                         NavItem{page,current:Page::Associates}
@@ -264,7 +264,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 Page::Associates=>rsx!{AssociatesPage{refresh}},
                 Page::Workflows=>rsx!{WorkflowPage{refresh}},
                 Page::ValidationInbox=>rsx!{ValidationInboxPage{refresh}},
-                Page::Tenants=>rsx!{TenantsPage{refresh}},
+                Page::Tenants=>rsx!{TenantsPage{refresh}},                Page::ThirdParties=>rsx!{crate::ui::dashboard::tiers_dolibarr::ThirdPartiesDolibarrPage{refresh}},
                 Page::Patrimony=>rsx!{PatrimonyPage{refresh}},
                 Page::Rentals=>rsx!{LeasesPage{refresh}},
                 Page::Billing=>rsx!{crate::ui::dashboard::invoices_dolibarr::InvoicesDolibarrPage{refresh}},

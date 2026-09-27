@@ -9,3 +9,4 @@ pub mod adapters;
 pub mod vat_dolibarr;
 pub use dashboard::DashboardWidgets;
 pub mod invoices_dolibarr;
+pub mod tiers_dolibarr;
