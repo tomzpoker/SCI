@@ -10,7 +10,7 @@ pub async fn dolibarr_list_invoices(limit: u32) -> Result<Vec<DolibarrInvoice>, 
         client.list_invoices(limit).await.map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_list_invoices est exécutée côté serveur"))
+    Err(ServerFnError::new("dolibarr_list_invoices est executee cote serveur"))
 }
 
 #[server]
@@ -22,7 +22,7 @@ pub async fn dolibarr_list_third_parties(limit: u32) -> Result<Vec<DolibarrThird
         client.list_third_parties(limit).await.map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_list_third_parties est exécutée côté serveur"))
+    Err(ServerFnError::new("dolibarr_list_third_parties est executee cote serveur"))
 }
 
 #[server]
@@ -39,11 +39,10 @@ pub async fn dolibarr_list_invoice_payments(
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_list_invoice_payments est exécutée côté serveur"))
+    Err(ServerFnError::new("dolibarr_list_invoice_payments est executee cote serveur"))
 }
-// ============================================================
-//  Sprint 2 - Factures (crÃ©ation + validation + lignes)
-// ============================================================
+
+// Factures (creation + validation + lignes)
 
 #[server]
 pub async fn dolibarr_create_invoice(
@@ -61,7 +60,7 @@ pub async fn dolibarr_create_invoice(
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_create_invoice est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_create_invoice est executee cote serveur"))
 }
 
 #[server]
@@ -76,7 +75,7 @@ pub async fn dolibarr_validate_invoice(invoice_id: String) -> Result<(), ServerF
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_validate_invoice est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_validate_invoice est executee cote serveur"))
 }
 
 #[server]
@@ -93,12 +92,10 @@ pub async fn dolibarr_get_invoice_lines(
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_get_invoice_lines est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_get_invoice_lines est executee cote serveur"))
 }
 
-// ============================================================
-//  Sprint 2 - Paiements
-// ============================================================
+// Paiements
 
 #[server]
 pub async fn dolibarr_create_payment(
@@ -106,23 +103,22 @@ pub async fn dolibarr_create_payment(
     date: i64,
     amount: f64,
     payment_id: i32,
+    account_id: i32,
 ) -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let client = crate::dolibarr::client::DolibarrClient::from_env()
             .map_err(ServerFnError::new)?;
         client
-            .create_payment(&invoice_id, date, amount, payment_id)
+            .create_payment(&invoice_id, date, amount, payment_id, account_id)
             .await
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_create_payment est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_create_payment est executee cote serveur"))
 }
 
-// ============================================================
-//  Sprint 2 - Tiers (crÃ©ation, mise Ã  jour, suppression)
-// ============================================================
+// Tiers (creation, mise a jour, suppression)
 
 #[server]
 pub async fn dolibarr_create_third_party(
@@ -143,7 +139,7 @@ pub async fn dolibarr_create_third_party(
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_create_third_party est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_create_third_party est executee cote serveur"))
 }
 
 #[server]
@@ -166,7 +162,7 @@ pub async fn dolibarr_update_third_party(
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_update_third_party est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_update_third_party est executee cote serveur"))
 }
 
 #[server]
@@ -181,5 +177,5 @@ pub async fn dolibarr_delete_third_party(id: String) -> Result<(), ServerFnError
             .map_err(ServerFnError::new)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("dolibarr_delete_third_party est exÃ©cutÃ©e cÃ´tÃ© serveur"))
+    Err(ServerFnError::new("dolibarr_delete_third_party est executee cote serveur"))
 }

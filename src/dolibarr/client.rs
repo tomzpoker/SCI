@@ -27,10 +27,6 @@ impl DolibarrClient {
         })
     }
 
-    // ------------------------------------------------------------------------
-    //  Helpers HTTP
-    // ------------------------------------------------------------------------
-
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let url = format!("{}/api/index.php/{}", self.base_url, path);
         let resp = self.http
@@ -103,12 +99,11 @@ impl DolibarrClient {
         resp.json::<T>().await.map_err(|e| format!("JSON error: {e}"))
     }
 
-    /// Dolibarr peut renvoyer un ID sous plusieurs formes selon les endpoints :
+    /// Dolibarr peut renvoyer un ID sous plusieurs formes :
     ///   - un nombre : 3
     ///   - une string numerique : "3"
     ///   - un objet : {"id": "3"}
     ///   - un tableau : [{"id": "3"}]
-    /// Cette fonction extrait un ID dans tous ces cas.
     fn extract_id(resp: &serde_json::Value) -> Option<String> {
         if let Some(n) = resp.as_i64() {
             return Some(n.to_string());
@@ -145,9 +140,7 @@ impl DolibarrClient {
         None
     }
 
-    // ------------------------------------------------------------------------
-    //  FACTURES - lecture
-    // ------------------------------------------------------------------------
+    // FACTURES - lecture
 
     pub async fn list_invoices(&self, limit: u32) -> Result<Vec<DolibarrInvoice>, String> {
         let path = format!("invoices?limit={}&sortfield=t.datec&sortorder=DESC", limit);
@@ -162,14 +155,8 @@ impl DolibarrClient {
         self.get_json(&format!("invoices/{}/lines", id)).await
     }
 
-    // ------------------------------------------------------------------------
-    //  FACTURES - ecriture
-    // ------------------------------------------------------------------------
+    // FACTURES - ecriture
 
-    /// Cree une facture brouillon dans Dolibarr.
-    /// - socid : ID du tiers client
-    /// - date : timestamp Unix (secondes)
-    /// - lines : lignes de facture
     pub async fn create_invoice(
         &self,
         socid: &str,
@@ -188,7 +175,6 @@ impl DolibarrClient {
             .ok_or_else(|| format!("Reponse Dolibarr inattendue : {resp}"))
     }
 
-    /// Valide une facture brouillon (statut passe de 0 a 1).
     pub async fn validate_invoice(&self, id: &str) -> Result<(), String> {
         let _: serde_json::Value = self
             .post_json(&format!("invoices/{}/validate", id), &serde_json::json!({}))
@@ -196,9 +182,7 @@ impl DolibarrClient {
         Ok(())
     }
 
-    // ------------------------------------------------------------------------
-    //  PAIEMENTS
-    // ------------------------------------------------------------------------
+    // PAIEMENTS
 
     pub async fn list_payments_for_invoice(
         &self,
@@ -211,27 +195,29 @@ impl DolibarrClient {
     /// Enregistre un paiement sur une facture.
     /// - date : timestamp Unix (secondes)
     /// - amount : montant en unites (pas en cents)
-    /// - payment_id : ID du mode de paiement Dolibarr (1 = virement, 2 = cheque, 3 = especes...)
+    /// - payment_id : ID du mode de paiement Dolibarr (1=virement, 2=cheque, 3=especes...)
+    /// - account_id : ID du compte bancaire Dolibarr (obligatoire)
     pub async fn create_payment(
         &self,
         invoice_id: &str,
         date: i64,
         amount: f64,
         payment_id: i32,
+        account_id: i32,
     ) -> Result<String, String> {
         #[derive(serde::Serialize)]
         struct CreatePaymentBody {
             datepaye: i64,
             paymentid: i32,
             closepaidinvoices: &'static str,
-            chid: i32,
+            accountid: i32,
             amount: f64,
         }
         let body = CreatePaymentBody {
             datepaye: date,
             paymentid: payment_id,
             closepaidinvoices: "yes",
-            chid: 1,
+            accountid: account_id,
             amount,
         };
         let path = format!("invoices/{}/payments", invoice_id);
@@ -239,9 +225,7 @@ impl DolibarrClient {
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
-    // ------------------------------------------------------------------------
-    //  TIERS
-    // ------------------------------------------------------------------------
+    // TIERS
 
     pub async fn list_third_parties(&self, limit: u32) -> Result<Vec<DolibarrThirdParty>, String> {
         let path = format!("thirdparties?limit={}&sortfield=t.nom&sortorder=ASC", limit);
