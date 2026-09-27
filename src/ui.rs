@@ -174,6 +174,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 NavItem{page,current:Page::Patrimony}
                 NavItem{page,current:Page::Bank}
                 NavItem{page,current:Page::Tasks}
+                NavItem{page,current:Page::Billing}
                 NavItem{page,current:Page::Documents}
                 NavItem{page,current:Page::Automations}
                 NavItem{page,current:Page::Setup}
@@ -204,7 +205,6 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                         NavItem{page,current:Page::Treasury}
                         NavItem{page,current:Page::Associates}
                         NavItem{page,current:Page::Rentals}
-                        NavItem{page,current:Page::Billing}
                         NavItem{page,current:Page::EInvoice}
                         NavItem{page,current:Page::Assistant}
                         NavItem{page,current:Page::Vat}

@@ -103,6 +103,48 @@ impl DolibarrClient {
         resp.json::<T>().await.map_err(|e| format!("JSON error: {e}"))
     }
 
+    /// Dolibarr peut renvoyer un ID sous plusieurs formes selon les endpoints :
+    ///   - un nombre : 3
+    ///   - une string numerique : "3"
+    ///   - un objet : {"id": "3"}
+    ///   - un tableau : [{"id": "3"}]
+    /// Cette fonction extrait un ID dans tous ces cas.
+    fn extract_id(resp: &serde_json::Value) -> Option<String> {
+        if let Some(n) = resp.as_i64() {
+            return Some(n.to_string());
+        }
+        if let Some(s) = resp.as_str() {
+            return Some(s.to_string());
+        }
+        if let Some(id) = resp.get("id") {
+            if let Some(s) = id.as_str() {
+                return Some(s.to_string());
+            }
+            if let Some(n) = id.as_i64() {
+                return Some(n.to_string());
+            }
+        }
+        if let Some(arr) = resp.as_array() {
+            if let Some(first) = arr.first() {
+                if let Some(id) = first.get("id") {
+                    if let Some(s) = id.as_str() {
+                        return Some(s.to_string());
+                    }
+                    if let Some(n) = id.as_i64() {
+                        return Some(n.to_string());
+                    }
+                }
+                if let Some(n) = first.as_i64() {
+                    return Some(n.to_string());
+                }
+                if let Some(s) = first.as_str() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        None
+    }
+
     // ------------------------------------------------------------------------
     //  FACTURES - lecture
     // ------------------------------------------------------------------------
@@ -121,13 +163,13 @@ impl DolibarrClient {
     }
 
     // ------------------------------------------------------------------------
-    //  FACTURES - Ã©criture (Sprint 4)
+    //  FACTURES - ecriture
     // ------------------------------------------------------------------------
 
-    /// CrÃ©e une facture brouillon dans Dolibarr.
-    /// - `socid` : ID du tiers client
-    /// - `date` : timestamp Unix (seconds)
-    /// - `lines` : lignes de facture
+    /// Cree une facture brouillon dans Dolibarr.
+    /// - socid : ID du tiers client
+    /// - date : timestamp Unix (secondes)
+    /// - lines : lignes de facture
     pub async fn create_invoice(
         &self,
         socid: &str,
@@ -142,13 +184,11 @@ impl DolibarrClient {
         }
         let body = CreateInvoiceBody { socid, date, lines };
         let resp: serde_json::Value = self.post_json("invoices", &body).await?;
-        resp.get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("RÃ©ponse Dolibarr inattendue : {resp}"))
+        Self::extract_id(&resp)
+            .ok_or_else(|| format!("Reponse Dolibarr inattendue : {resp}"))
     }
 
-    /// Valide une facture brouillon (statut passe Ã  "impayÃ©e").
+    /// Valide une facture brouillon (statut passe de 0 a 1).
     pub async fn validate_invoice(&self, id: &str) -> Result<(), String> {
         let _: serde_json::Value = self
             .post_json(&format!("invoices/{}/validate", id), &serde_json::json!({}))
@@ -160,7 +200,6 @@ impl DolibarrClient {
     //  PAIEMENTS
     // ------------------------------------------------------------------------
 
-    /// Liste les paiements (encaissements) liÃ©s Ã  une facture.
     pub async fn list_payments_for_invoice(
         &self,
         invoice_id: &str,
@@ -170,9 +209,9 @@ impl DolibarrClient {
     }
 
     /// Enregistre un paiement sur une facture.
-    /// - `date` : timestamp Unix (seconds)
-    /// - `amount` : montant en unitÃ©s (pas en cents)
-    /// - `payment_id` : ID du mode de paiement (1 = virement, 2 = chÃ¨que, 3 = espÃ¨ces, etc.)
+    /// - date : timestamp Unix (secondes)
+    /// - amount : montant en unites (pas en cents)
+    /// - payment_id : ID du mode de paiement Dolibarr (1 = virement, 2 = cheque, 3 = especes...)
     pub async fn create_payment(
         &self,
         invoice_id: &str,
@@ -197,7 +236,7 @@ impl DolibarrClient {
         };
         let path = format!("invoices/{}/payments", invoice_id);
         let resp: serde_json::Value = self.post_json(&path, &body).await?;
-        Ok(resp.to_string())
+        Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
     // ------------------------------------------------------------------------
@@ -213,7 +252,6 @@ impl DolibarrClient {
         self.get_json(&format!("thirdparties/{}", id)).await
     }
 
-    /// CrÃ©e un tiers (client). Retourne l'ID Dolibarr.
     pub async fn create_third_party(
         &self,
         name: &str,
@@ -245,14 +283,10 @@ impl DolibarrClient {
             code_client: "-1",
         };
         let resp: serde_json::Value = self.post_json("thirdparties", &body).await?;
-        resp.get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| resp.get("id").and_then(|v| v.as_i64()).map(|n| n.to_string()))
-            .ok_or_else(|| format!("RÃ©ponse Dolibarr inattendue : {resp}"))
+        Self::extract_id(&resp)
+            .ok_or_else(|| format!("Reponse Dolibarr inattendue : {resp}"))
     }
 
-    /// Met Ã  jour un tiers existant.
     pub async fn update_third_party(
         &self,
         id: &str,
@@ -279,7 +313,6 @@ impl DolibarrClient {
         Ok(())
     }
 
-    /// Supprime un tiers.
     pub async fn delete_third_party(&self, id: &str) -> Result<(), String> {
         self.delete_json(&format!("thirdparties/{}", id)).await
     }
@@ -291,6 +324,6 @@ pub struct DolibarrClient;
 #[cfg(not(feature = "server"))]
 impl DolibarrClient {
     pub fn from_env() -> Result<Self, String> {
-        Err("DolibarrClient est exÃ©cutÃ© cÃ´tÃ© serveur".into())
+        Err("DolibarrClient est execute cote serveur".into())
     }
 }

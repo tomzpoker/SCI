@@ -1,7 +1,11 @@
 use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
-use crate::dolibarr::models::{DolibarrInvoice, DolibarrThirdParty};
+use crate::dolibarr::models::{DolibarrInvoice, DolibarrInvoiceLine, DolibarrThirdParty};
+
+// ============================================================
+//  Filtres
+// ============================================================
 
 #[derive(Clone, Copy, PartialEq)]
 enum InvoiceFilter {
@@ -32,6 +36,10 @@ impl InvoiceFilter {
         }
     }
 }
+
+// ============================================================
+//  Helpers
+// ============================================================
 
 fn parse_amount(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
@@ -72,22 +80,68 @@ fn status_label(inv: &DolibarrInvoice) -> (&'static str, &'static str) {
     }
 }
 
+// ============================================================
+//  Ligne de brouillon en cours de saisie
+// ============================================================
+
+#[derive(Clone, PartialEq)]
+struct LineDraft {
+    desc: String,
+    qty: String,
+    subprice: String,
+    tva_tx: String,
+}
+
+impl LineDraft {
+    fn empty() -> Self {
+        Self {
+            desc: String::new(),
+            qty: "1".to_string(),
+            subprice: "0".to_string(),
+            tva_tx: "20".to_string(),
+        }
+    }
+
+    fn to_dolibarr_line(&self) -> Option<DolibarrInvoiceLine> {
+        let qty: f64 = self.qty.replace(',', ".").parse().ok()?;
+        let subprice: f64 = self.subprice.replace(',', ".").parse().ok()?;
+        let tva: f64 = self.tva_tx.replace(',', ".").parse().ok()?;
+        Some(DolibarrInvoiceLine::new(&self.desc, qty, subprice, tva))
+    }
+}
+
+// ============================================================
+//  Page principale
+// ============================================================
+
 const PAGE_SIZE: usize = 20;
 
 #[component]
 pub fn InvoicesDolibarrPage(refresh: Signal<u64>) -> Element {
+    let mut bump = use_signal(|| 0u64);
+
     let invoices = use_resource(move || {
         let _ = refresh();
+        let _ = bump();
         async move { crate::dolibarr::server_fns::dolibarr_list_invoices(200).await }
     });
 
     let thirds = use_resource(move || {
         let _ = refresh();
+        let _ = bump();
         async move { crate::dolibarr::server_fns::dolibarr_list_third_parties(200).await }
     });
 
     let mut filter = use_signal(|| InvoiceFilter::All);
     let mut current_page = use_signal(|| 0usize);
+
+    // --- Modale nouvelle facture ---
+    let mut show_new = use_signal(|| false);
+    let mut new_socid = use_signal(String::new);
+    let mut new_date = use_signal(|| Utc::now().date_naive().format("%Y-%m-%d").to_string());
+    let mut new_lines = use_signal(|| vec![LineDraft::empty()]);
+    let mut form_msg = use_signal(String::new);
+    let mut busy = use_signal(|| false);
 
     let dl_url = "http://localhost:8081";
 
@@ -96,7 +150,7 @@ pub fn InvoicesDolibarrPage(refresh: Signal<u64>) -> Element {
             div {
                 div { class: "eyebrow", "FACTURATION / DOLIBARR" }
                 h2 { "Factures" }
-                p { "Vue en lecture des factures Dolibarr. La creation et l'encaissement seront ajoutes au Sprint 4." }
+                p { "Vue en lecture et creation de brouillons dans Dolibarr." }
             }
         }
 
@@ -118,12 +172,25 @@ pub fn InvoicesDolibarrPage(refresh: Signal<u64>) -> Element {
                         }
                     }
                 }
-                button {
-                    style: "padding: 5px 12px; background: transparent; color: #a78bfa; border: 1px solid #7c3aed; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600;",
-                    onclick: move |_| {
-                        let _ = document::eval("window.open('http://localhost:8081/compta/facture/list.php', '_blank');");
-                    },
-                    "Ouvrir Dolibarr"
+                div { style: "display: flex; gap: 8px;",
+                    button {
+                        style: "padding: 5px 12px; background: #7c3aed; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600;",
+                        onclick: move |_| {
+                            new_socid.set(String::new());
+                            new_date.set(Utc::now().date_naive().format("%Y-%m-%d").to_string());
+                            new_lines.set(vec![LineDraft::empty()]);
+                            form_msg.set(String::new());
+                            show_new.set(true);
+                        },
+                        "+ Nouvelle facture"
+                    }
+                    button {
+                        style: "padding: 5px 12px; background: transparent; color: #a78bfa; border: 1px solid #7c3aed; border-radius: 6px; cursor: pointer; font-size: 0.75rem; font-weight: 600;",
+                        onclick: move |_| {
+                            let _ = document::eval("window.open('http://localhost:8081/compta/facture/list.php', '_blank');");
+                        },
+                        "Ouvrir Dolibarr"
+                    }
                 }
             }
         }
@@ -242,6 +309,221 @@ pub fn InvoicesDolibarrPage(refresh: Signal<u64>) -> Element {
                     div { style: "color: #94a3b8;", "Chargement des factures..." }
                 }
             },
+        }
+
+        // ============================================================
+        //  Modale : Nouvelle facture
+        // ============================================================
+        if show_new() {
+            div {
+                class: "dash-modal-overlay",
+                onclick: move |_| show_new.set(false),
+                div {
+                    class: "dash-modal",
+                    style: "max-width: 720px; max-height: 85vh; overflow-y: auto;",
+                    onclick: move |e| e.stop_propagation(),
+
+                    div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;",
+                        div {
+                            div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;", "Nouvelle facture" }
+                            h2 { style: "margin: 4px 0 0 0;", "Creer un brouillon dans Dolibarr" }
+                        }
+                        button {
+                            style: "background: transparent; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer; line-height: 1;",
+                            onclick: move |_| show_new.set(false),
+                            "x"
+                        }
+                    }
+
+                    if !form_msg().is_empty() {
+                        div { style: "background: #450a0a; border: 1px solid #7f1d1d; color: #fecaca; padding: 8px 12px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 12px;",
+                            "{form_msg()}"
+                        }
+                    }
+
+                    div { style: "display: flex; flex-direction: column; gap: 12px;",
+                        // Tiers
+                        label { class: "field",
+                            span { "Client" }
+                            select {
+                                value: "{new_socid}",
+                                onchange: move |e| new_socid.set(e.value()),
+                                option { value: "", "Selectionner un tiers..." }
+                                for t in thirds.read().as_ref().and_then(|r| r.as_ref().ok()).map(|v| v.as_slice()).unwrap_or(&[]).iter() {
+                                    option {
+                                        value: "{t.id}",
+                                        "{t.name}"
+                                    }
+                                }
+                            }
+                        }
+
+                        // Date
+                        label { class: "field",
+                            span { "Date de facture (AAAA-MM-JJ)" }
+                            input {
+                                r#type: "text",
+                                value: "{new_date}",
+                                oninput: move |e| new_date.set(e.value()),
+                            }
+                        }
+
+                        // Lignes
+                        div { style: "margin-top: 8px;",
+                            div { style: "font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;",
+                                "Lignes"
+                            }
+                            for (idx, line) in new_lines().iter().enumerate() {
+                                div {
+                                    key: "{idx}",
+                                    style: "background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px;",
+                                    div { style: "display: flex; gap: 8px; align-items: center; margin-bottom: 6px;",
+                                        input {
+                                            r#type: "text",
+                                            placeholder: "Description",
+                                            value: "{line.desc}",
+                                            oninput: move |e| {
+                                                let v = e.value();
+                                                new_lines.with_mut(|lines| {
+                                                    if let Some(l) = lines.get_mut(idx) { l.desc = v; }
+                                                });
+                                            },
+                                            style: "flex: 1; padding: 6px 10px; background: var(--bg-glass); border: 1px solid var(--border); border-radius: 6px; color: #e2e8f0; font-size: 0.82rem;",
+                                        }
+                                        button {
+                                            style: "padding: 4px 8px; background: transparent; border: 1px solid var(--border); color: #f87171; border-radius: 6px; cursor: pointer; font-size: 0.7rem;",
+                                            onclick: move |_| {
+                                                new_lines.with_mut(|lines| {
+                                                    if lines.len() > 1 { lines.remove(idx); }
+                                                });
+                                            },
+                                            "Suppr"
+                                        }
+                                    }
+                                    div { style: "display: flex; gap: 8px;",
+                                        div { style: "flex: 1;",
+                                            div { style: "font-size: 0.65rem; color: #64748b; margin-bottom: 2px;", "Qte" }
+                                            input {
+                                                r#type: "text",
+                                                value: "{line.qty}",
+                                                oninput: move |e| {
+                                                    let v = e.value();
+                                                    new_lines.with_mut(|lines| {
+                                                        if let Some(l) = lines.get_mut(idx) { l.qty = v; }
+                                                    });
+                                                },
+                                                style: "width: 100%; padding: 5px 8px; background: var(--bg-glass); border: 1px solid var(--border); border-radius: 6px; color: #e2e8f0; font-size: 0.78rem;",
+                                            }
+                                        }
+                                        div { style: "flex: 2;",
+                                            div { style: "font-size: 0.65rem; color: #64748b; margin-bottom: 2px;", "Prix HT" }
+                                            input {
+                                                r#type: "text",
+                                                value: "{line.subprice}",
+                                                oninput: move |e| {
+                                                    let v = e.value();
+                                                    new_lines.with_mut(|lines| {
+                                                        if let Some(l) = lines.get_mut(idx) { l.subprice = v; }
+                                                    });
+                                                },
+                                                style: "width: 100%; padding: 5px 8px; background: var(--bg-glass); border: 1px solid var(--border); border-radius: 6px; color: #e2e8f0; font-size: 0.78rem;",
+                                            }
+                                        }
+                                        div { style: "flex: 1;",
+                                            div { style: "font-size: 0.65rem; color: #64748b; margin-bottom: 2px;", "TVA %" }
+                                            input {
+                                                r#type: "text",
+                                                value: "{line.tva_tx}",
+                                                oninput: move |e| {
+                                                    let v = e.value();
+                                                    new_lines.with_mut(|lines| {
+                                                        if let Some(l) = lines.get_mut(idx) { l.tva_tx = v; }
+                                                    });
+                                                },
+                                                style: "width: 100%; padding: 5px 8px; background: var(--bg-glass); border: 1px solid var(--border); border-radius: 6px; color: #e2e8f0; font-size: 0.78rem;",
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            button {
+                                style: "padding: 5px 12px; background: transparent; border: 1px dashed var(--border); color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 0.72rem; width: 100%;",
+                                onclick: move |_| {
+                                    new_lines.with_mut(|lines| lines.push(LineDraft::empty()));
+                                },
+                                "+ Ajouter une ligne"
+                            }
+                        }
+                    }
+
+                    div { style: "display: flex; gap: 8px; margin-top: 20px;",
+                        button {
+                            class: "primary",
+                            style: "flex: 1;",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                let socid = new_socid();
+                                let date_str = new_date();
+                                let lines_draft = new_lines();
+                                busy.set(true);
+                                form_msg.set(String::new());
+                                spawn(async move {
+                                    if socid.is_empty() {
+                                        form_msg.set("Selectionne un client".into());
+                                        busy.set(false);
+                                        return;
+                                    }
+                                    let date_naive = match chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+                                        Ok(d) => d,
+                                        Err(_) => {
+                                            form_msg.set("Date invalide (AAAA-MM-JJ)".into());
+                                            busy.set(false);
+                                            return;
+                                        }
+                                    };
+                                    let ts = date_naive.and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
+                                    let mut payload: Vec<DolibarrInvoiceLine> = Vec::new();
+                                    for l in lines_draft.iter() {
+                                        if l.desc.trim().is_empty() { continue; }
+                                        match l.to_dolibarr_line() {
+                                            Some(dl) => payload.push(dl),
+                                            None => {
+                                                form_msg.set(format!("Ligne invalide : {}", l.desc));
+                                                busy.set(false);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    if payload.is_empty() {
+                                        form_msg.set("Au moins une ligne avec description".into());
+                                        busy.set(false);
+                                        return;
+                                    }
+                                    match crate::dolibarr::server_fns::dolibarr_create_invoice(
+                                        socid, ts, payload
+                                    ).await {
+                                        Ok(_id) => {
+                                            show_new.set(false);
+                                            bump.with_mut(|v| *v += 1);
+                                            busy.set(false);
+                                        }
+                                        Err(e) => {
+                                            form_msg.set(format!("{}", e));
+                                            busy.set(false);
+                                        }
+                                    }
+                                });
+                            },
+                            if busy() { "Creation..." } else { "Creer le brouillon" }
+                        }
+                        button {
+                            class: "secondary",
+                            onclick: move |_| show_new.set(false),
+                            "Annuler"
+                        }
+                    }
+                }
+            }
         }
     }
 }
