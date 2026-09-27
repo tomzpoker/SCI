@@ -267,7 +267,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 Page::Tenants=>rsx!{TenantsPage{refresh}},
                 Page::Patrimony=>rsx!{PatrimonyPage{refresh}},
                 Page::Rentals=>rsx!{LeasesPage{refresh}},
-                Page::Billing=>rsx!{BillingManagementPage{refresh}},
+                Page::Billing=>rsx!{crate::ui::dashboard::invoices_dolibarr::InvoicesDolibarrPage{refresh}},
                 Page::EInvoice=>rsx!{EInvoicePage{refresh}},
                 Page::Assistant=>rsx!{AssistantPage{refresh}},
                 Page::Bank=>rsx!{BankManagementPage{refresh}},
