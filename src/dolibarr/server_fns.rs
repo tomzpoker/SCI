@@ -725,3 +725,367 @@ pub async fn dolibarr_list_patrimoine_documents(
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_list_patrimoine_documents est executee cote serveur"))
 }
+
+// ============================================================
+//  SCAN FACTURE FOURNISSEUR (OCR + parsing)
+// ============================================================
+
+use crate::dolibarr::invoice_parser::ParsedInvoice;
+
+#[cfg(feature = "server")]
+use crate::dolibarr::invoice_parser::{extract_text_from_pdf, parse_invoice_text};
+
+/// Analyse un PDF de facture fournisseur et retourne les champs extraits.
+/// L'utilisateur devra valider avant qu'on pousse dans Dolibarr.
+#[server]
+pub async fn dolibarr_parse_invoice_pdf(
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<ParsedInvoice, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let _ = filename;
+        let text = extract_text_from_pdf(&bytes)
+            .map_err(ServerFnError::new)?;
+        let parsed = parse_invoice_text(&text);
+        Ok(parsed)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_parse_invoice_pdf est executee cote serveur"))
+}
+
+/// Cree une facture fournisseur dans Dolibarr (SQL direct, car l'API REST
+/// ne couvre pas correctement ce module dans Dolibarr 19).
+#[server]
+pub async fn dolibarr_create_supplier_invoice(
+    supplier_name: String,
+    invoice_number: String,
+    invoice_date: String,   // AAAA-MM-JJ
+    total_ht: String,       // "123.45"
+    total_tva: String,
+    total_ttc: String,
+    tva_rate: String,
+    file_name: String,
+    file_bytes: Vec<u8>,
+) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        // 1. Verifie qu'on a bien un tiers fournisseur (ou on le cree)
+        let safe_supplier = supplier_name.replace('\'', "''").trim().to_string();
+        if safe_supplier.is_empty() {
+            return Err(ServerFnError::new("Nom du fournisseur manquant"));
+        }
+
+        // Cherche le tiers existant (client=0, fournisseur=1)
+        let sql_find = format!(
+            "SELECT rowid FROM llx_societe WHERE entity=1 AND nom = '{}' AND fournisseur = 1 LIMIT 1;",
+            safe_supplier
+        );
+        let find_out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_find])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL find : {}", e)))?;
+        let found = String::from_utf8_lossy(&find_out.stdout).trim().to_string();
+
+        let supplier_id: i64 = if found.is_empty() {
+            // Cree le fournisseur
+            let sql_create = format!(
+                "INSERT INTO llx_societe (nom, entity, client, fournisseur, status, datec) \
+                 VALUES ('{}', 1, 0, 1, 1, NOW()) RETURNING rowid;",
+                safe_supplier
+            );
+            let create_out = tokio::process::Command::new("docker")
+                .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_create])
+                .output()
+                .await
+                .map_err(|e| ServerFnError::new(format!("Erreur SQL create supplier : {}", e)))?;
+            String::from_utf8_lossy(&create_out.stdout)
+                .trim()
+                .parse()
+                .map_err(|_| ServerFnError::new("Impossible de creer le fournisseur"))?
+        } else {
+            found.parse().map_err(|_| ServerFnError::new("ID fournisseur invalide"))?
+        };
+
+        // 2. Convertit les montants en centimes
+        let ht_cents = (total_ht.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
+        let tva_cents = (total_tva.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
+        let ttc_cents = (total_ttc.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
+
+        // 3. Cree la facture fournisseur dans llx_facture_fourn
+        let ref_safe = invoice_number.replace('\'', "''");
+        let date_safe = if invoice_date.is_empty() {
+            "CURRENT_DATE".to_string()
+        } else {
+            format!("'{}'", invoice_date.replace('\'', "''"))
+        };
+        let sql_inv = format!(
+            "INSERT INTO llx_facture_fourn (ref, ref_supplier, entity, fk_soc, datec, datef, total_ht, total_tva, total_ttc, fk_statut, paye, tva_intra) \
+             VALUES ('{}', '{}', 1, {}, NOW(), {}, {}, {}, {}, 0, 0, '') RETURNING rowid;",
+            ref_safe, ref_safe, supplier_id, date_safe, ht_cents, tva_cents, ttc_cents
+        );
+        let inv_out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_inv])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL facture : {}", e)))?;
+
+        if !inv_out.status.success() {
+            return Err(ServerFnError::new(format!(
+                "Erreur creation facture : {}",
+                String::from_utf8_lossy(&inv_out.stderr)
+            )));
+        }
+
+        let invoice_id: i64 = String::from_utf8_lossy(&inv_out.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| ServerFnError::new("ID facture fournisseur introuvable"))?;
+
+        // 4. Ligne de facture
+        let sql_line = format!(
+            "INSERT INTO llx_facture_fourn_det (fk_facture_fourn, description, qty, tva_tx, total_ht, total_tva, total_ttc) \
+             VALUES ({}, 'Ligne importee automatiquement', 1, {}, {}, {}, {});",
+            invoice_id,
+            tva_rate.parse::<f64>().unwrap_or(20.0),
+            ht_cents, tva_cents, ttc_cents
+        );
+        let _ = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_line])
+            .output()
+            .await;
+
+        // 5. Attache le PDF
+        let safe_filename: String = file_name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' ')
+            .collect::<String>()
+            .trim()
+            .replace(' ', "_");
+
+        let rel_dir = format!("fournisseur/facture/{}/", invoice_id);
+        let container_dir = format!("/var/www/documents/{}", rel_dir);
+        let container_filepath = format!("/var/www/documents/{}{}", rel_dir, safe_filename);
+
+        write_file_in_container(&container_dir, &container_filepath, &file_bytes, &safe_filename).await?;
+
+        let esc_filename = safe_filename.replace('\'', "''");
+        let esc_filepath = format!("{}{}", rel_dir, safe_filename).replace('\'', "''");
+
+        let sql_ecm = format!(
+            "INSERT INTO llx_ecm_files (filename, filepath, date_c, entity, gen_or_uploaded, label) \
+             VALUES ('{}', '{}', NOW(), 1, 'uploaded', '{}');",
+            esc_filename, esc_filepath, esc_filename
+        );
+        let _ = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_ecm])
+            .output()
+            .await;
+
+        // 6. Lien ecmfile -> facture_fourn
+        let sql_get_id = format!(
+            "SELECT rowid FROM llx_ecm_files WHERE filepath = '{}' ORDER BY rowid DESC LIMIT 1;",
+            esc_filepath
+        );
+        let id_out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_get_id])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL get id : {}", e)))?;
+        let ecm_id_str = String::from_utf8_lossy(&id_out.stdout).trim().to_string();
+        if let Ok(ecm_id) = ecm_id_str.parse::<i64>() {
+            let sql_link = format!(
+                "INSERT INTO llx_element_element (fk_source, sourcetype, fk_target, targettype) \
+                 VALUES ({}, 'ecmfile', {}, 'facture_fourn');",
+                ecm_id, invoice_id
+            );
+            let _ = tokio::process::Command::new("docker")
+                .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_link])
+                .output()
+                .await;
+        }
+
+        Ok(invoice_id.to_string())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_create_supplier_invoice est executee cote serveur"))
+}
+
+/// Ajoute un lien supplementaire a un fichier ECM deja existant.
+/// Permet de rattacher un document a plusieurs entites (ex : bien + locataire).
+#[server]
+pub async fn dolibarr_link_document(
+    ecm_file_id: i64,
+    target_id: String,
+    target_type: String,   // "societe", "facture", "facture_fourn"
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let tid = sanitize_id(&target_id)?;
+        let allowed = ["societe", "facture", "facture_fourn", "project", "user"];
+        if !allowed.contains(&target_type.as_str()) {
+            return Err(ServerFnError::new("target_type invalide"));
+        }
+        let sql = format!(
+            "INSERT INTO llx_element_element (fk_source, sourcetype, fk_target, targettype) \
+             VALUES ({}, 'ecmfile', {}, '{}') ON CONFLICT DO NOTHING;",
+            ecm_file_id, tid, target_type
+        );
+        let out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL : {}", e)))?;
+        if !out.status.success() {
+            return Err(ServerFnError::new(format!(
+                "Erreur SQL : {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_link_document est executee cote serveur"))
+}
+
+/// Retourne l'ID du dernier fichier ECM insere (pour creer des liens apres upload).
+#[server]
+pub async fn dolibarr_get_last_ecm_id() -> Result<i64, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let sql = "SELECT rowid FROM llx_ecm_files ORDER BY rowid DESC LIMIT 1;";
+        let out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", sql])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL : {}", e)))?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        s.parse::<i64>().map_err(|_| ServerFnError::new("Aucun fichier ECM"))
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_get_last_ecm_id est executee cote serveur"))
+}
+
+/// Telecharge un fichier depuis une URL et renvoie (filename, bytes).
+/// Limite : 25 Mo max.
+#[server]
+pub async fn dolibarr_download_from_url(
+    url: String,
+) -> Result<(String, Vec<u8>), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(ServerFnError::new("URL vide"));
+        }
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(ServerFnError::new("URL doit commencer par http:// ou https://"));
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| ServerFnError::new(format!("Erreur client HTTP : {}", e)))?;
+
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur telechargement : {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(ServerFnError::new(format!(
+                "Erreur HTTP {} : {}",
+                resp.status(),
+                url
+            )));
+        }
+
+        // Taille max : 25 Mo
+        const MAX_SIZE: usize = 25 * 1024 * 1024;
+        if let Some(len) = resp.content_length() {
+            if len as usize > MAX_SIZE {
+                return Err(ServerFnError::new(format!(
+                    "Fichier trop gros : {} Mo (max 25 Mo)",
+                    len / 1024 / 1024
+                )));
+            }
+        }
+
+        // Nom de fichier : extrait depuis l'URL ou depuis Content-Disposition
+        let content_disposition = resp
+            .headers()
+            .get("content-disposition")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let filename = extract_filename_from_response(url, content_disposition.as_deref());
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur lecture body : {}", e)))?
+            .to_vec();
+
+        if bytes.len() > MAX_SIZE {
+            return Err(ServerFnError::new(format!(
+                "Fichier trop gros : {} Mo (max 25 Mo)",
+                bytes.len() / 1024 / 1024
+            )));
+        }
+
+        Ok((filename, bytes))
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_download_from_url est executee cote serveur"))
+}
+
+#[cfg(feature = "server")]
+fn extract_filename_from_response(url: &str, content_disposition: Option<&str>) -> String {
+    // 1. Content-Disposition : filename="xxx.pdf" ou filename=xxx.pdf
+    if let Some(cd) = content_disposition {
+        let cd_lower = cd.to_lowercase();
+        if cd_lower.contains("filename=") {
+            let after = &cd[cd_lower.find("filename=").unwrap() + 9..];
+            let candidate = after
+                .trim_start_matches('"')
+                .split('"')
+                .next()
+                .unwrap_or("")
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !candidate.is_empty() {
+                return sanitize_filename(&candidate);
+            }
+        }
+    }
+
+    // 2. Dernier segment de l'URL (avant eventuels parametres ?xxx)
+    let without_query = url.split('?').next().unwrap_or(url);
+    let segment = without_query.split('/').next_back().unwrap_or("");
+    if !segment.is_empty() && segment.contains('.') {
+        return sanitize_filename(segment);
+    }
+
+    // 3. Fallback : nom generique horodate
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    format!("fichier_{}.pdf", ts)
+}
+
+#[cfg(feature = "server")]
+fn sanitize_filename(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' ')
+        .collect();
+    let trimmed = cleaned.trim().replace(' ', "_");
+    if trimmed.is_empty() {
+        "fichier.pdf".to_string()
+    } else {
+        trimmed
+    }
+}
