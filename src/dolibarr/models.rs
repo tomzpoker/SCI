@@ -279,3 +279,37 @@ pub struct BankLinesWrapper {
     #[serde(default)]
     pub value: Vec<DolibarrBankLine>,
 }
+// ============================================================
+//  DOCUMENTS (GED)
+// ============================================================
+
+/// Document Dolibarr (fichier dans la GED).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DolibarrDocument {
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub filename: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub filepath: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub fullpath: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub modulepart: String,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub size: i64,
+
+    #[serde(default, deserialize_with = "string_or_number")]
+    pub date: i64,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub mime: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub level1name: String,
+
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub relativename: String,
+}

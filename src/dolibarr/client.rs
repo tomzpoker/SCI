@@ -1,6 +1,6 @@
 use crate::dolibarr::models::{
-    DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrInvoice,
-    DolibarrInvoiceLine, DolibarrPayment, DolibarrThirdParty,
+    DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrDocument,
+    DolibarrInvoice, DolibarrInvoiceLine, DolibarrPayment, DolibarrThirdParty,
 };
 
 #[cfg(feature = "server")]
@@ -22,7 +22,7 @@ impl DolibarrClient {
             base_url,
             api_key,
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .map_err(|e| e.to_string())?,
         })
@@ -161,7 +161,9 @@ impl DolibarrClient {
         }
     }
 
-    // FACTURES - lecture
+    // ------------------------------------------------------------------------
+    //  FACTURES - lecture
+    // ------------------------------------------------------------------------
 
     pub async fn list_invoices(&self, limit: u32) -> Result<Vec<DolibarrInvoice>, String> {
         let path = format!("invoices?limit={}&sortfield=t.datec&sortorder=DESC", limit);
@@ -176,7 +178,9 @@ impl DolibarrClient {
         self.get_json(&format!("invoices/{}/lines", id)).await
     }
 
-    // FACTURES - ecriture
+    // ------------------------------------------------------------------------
+    //  FACTURES - ecriture
+    // ------------------------------------------------------------------------
 
     pub async fn create_invoice(
         &self,
@@ -203,7 +207,9 @@ impl DolibarrClient {
         Ok(())
     }
 
-    // PAIEMENTS
+    // ------------------------------------------------------------------------
+    //  PAIEMENTS
+    // ------------------------------------------------------------------------
 
     pub async fn list_payments_for_invoice(
         &self,
@@ -241,7 +247,9 @@ impl DolibarrClient {
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
-    // TIERS
+    // ------------------------------------------------------------------------
+    //  TIERS
+    // ------------------------------------------------------------------------
 
     pub async fn list_third_parties(&self, limit: u32) -> Result<Vec<DolibarrThirdParty>, String> {
         let path = format!("thirdparties?limit={}&sortfield=t.nom&sortorder=ASC", limit);
@@ -317,7 +325,9 @@ impl DolibarrClient {
         self.delete_json(&format!("thirdparties/{}", id)).await
     }
 
-    // BANQUE
+    // ------------------------------------------------------------------------
+    //  BANQUE
+    // ------------------------------------------------------------------------
 
     pub async fn list_bank_accounts(&self) -> Result<Vec<DolibarrBankAccount>, String> {
         let url = format!("{}/api/index.php/bankaccounts", self.base_url);
@@ -427,37 +437,129 @@ impl DolibarrClient {
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
-    /// Supprime une ligne bancaire dans Dolibarr.
-    /// Essaie plusieurs endpoints car Dolibarr n'a pas de chemin standard.
-    pub async fn delete_bank_line(
+    // ------------------------------------------------------------------------
+    //  DOCUMENTS (GED)
+    // ------------------------------------------------------------------------
+
+    /// Liste les documents lies a un modulepart + id.
+    pub async fn list_documents(
         &self,
-        account_id: &str,
-        line_id: &str,
+        modulepart: &str,
+        id: &str,
+    ) -> Result<Vec<DolibarrDocument>, String> {
+        let url = format!(
+            "{}/api/index.php/documents?modulepart={}&id={}",
+            self.base_url, modulepart, id
+        );
+        let resp = self.http
+            .get(&url)
+            .header("DOLAPIKEY", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("JSON parse error: {e}. Body: {}", &body[..body.len().min(500)]))?;
+
+        let arr = if let Some(v) = json.as_array() {
+            v.clone()
+        } else if let Some(v) = json.get("value").and_then(|v| v.as_array()) {
+            v.clone()
+        } else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = Vec::new();
+        for item in arr {
+            result.push(Self::parse_document(&item));
+        }
+        Ok(result)
+    }
+
+    fn parse_document(item: &serde_json::Value) -> DolibarrDocument {
+        DolibarrDocument {
+            filename: Self::json_to_string(item.get("filename")),
+            filepath: Self::json_to_string(item.get("filepath")),
+            fullpath: Self::json_to_string(item.get("fullpath")),
+            modulepart: Self::json_to_string(item.get("modulepart")),
+            size: Self::json_to_i64(item.get("size")),
+            date: Self::json_to_i64(item.get("date")),
+            mime: Self::json_to_string(item.get("mime")),
+            level1name: Self::json_to_string(item.get("level1name")),
+            relativename: Self::json_to_string(item.get("relativename")),
+        }
+    }
+
+    /// Upload un fichier dans la GED Dolibarr.
+    pub async fn upload_document(
+        &self,
+        filename: &str,
+        modulepart: &str,
+        ref_value: &str,
+        bytes: Vec<u8>,
     ) -> Result<(), String> {
-        // Essai 1 : /banklines/{id}
-        let r1 = self.delete_json(&format!("banklines/{}", line_id)).await;
-        if r1.is_ok() {
-            return Ok(());
-        }
+        let url = format!("{}/api/index.php/documents/upload", self.base_url);
 
-        // Essai 2 : /bankaccounts/{id}/lines/{line_id}
-        let r2 = self.delete_json(&format!("bankaccounts/{}/lines/{}", account_id, line_id)).await;
-        if r2.is_ok() {
-            return Ok(());
-        }
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|e| format!("MIME error: {e}"))?;
 
-        // Essai 3 : /bankaccounts/{id}/line/{line_id}
-        let r3 = self.delete_json(&format!("bankaccounts/{}/line/{}", account_id, line_id)).await;
-        if r3.is_ok() {
-            return Ok(());
-        }
+        let form = reqwest::multipart::Form::new()
+            .text("filename", filename.to_string())
+            .text("modulepart", modulepart.to_string())
+            .text("ref", ref_value.to_string())
+            .part("file", part);
 
-        // Aucun endpoint n'a marché, on remonte l'erreur la plus parlante
-        let e2 = r2.err().unwrap_or_default();
-        Err(format!(
-            "Aucun endpoint DELETE n'a fonctionne. Derniere erreur : {}",
-            e2
-        ))
+        let resp = self.http
+            .post(&url)
+            .header("DOLAPIKEY", &self.api_key)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {e}"))?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("HTTP {status}: {body}"));
+        }
+        Ok(())
+    }
+
+    /// Supprime un document de la GED Dolibarr.
+    pub async fn delete_document(
+        &self,
+        modulepart: &str,
+        original_file: &str,
+    ) -> Result<(), String> {
+        let url = format!("{}/api/index.php/documents", self.base_url);
+        let body = serde_json::json!({
+            "modulepart": modulepart,
+            "original_file": original_file,
+        });
+
+        let resp = self.http
+            .delete(&url)
+            .header("DOLAPIKEY", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {e}"))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {body}"));
+        }
+        Ok(())
     }
 }
 

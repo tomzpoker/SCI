@@ -11,3 +11,4 @@ pub use dashboard::DashboardWidgets;
 pub mod invoices_dolibarr;
 pub mod tiers_dolibarr;
 pub mod banking_dolibarr;
+pub mod documents_dolibarr;

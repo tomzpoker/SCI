@@ -3,10 +3,6 @@ use dioxus::prelude::*;
 
 use crate::dolibarr::models::{DolibarrBankAccount, DolibarrBankLine, DolibarrInvoice, DolibarrThirdParty};
 
-// ============================================================
-//  Parsing CSV
-// ============================================================
-
 #[derive(Clone, PartialEq)]
 struct CsvLine {
     raw: String,
@@ -171,10 +167,6 @@ fn parse_csv(content: &str) -> Vec<CsvLine> {
     result
 }
 
-// ============================================================
-//  Matching
-// ============================================================
-
 fn parse_total(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
 }
@@ -295,10 +287,6 @@ fn match_line(
     }
 }
 
-// ============================================================
-//  Helpers
-// ============================================================
-
 fn score_color(score: i32) -> &'static str {
     if score >= 80 { "#4ade80" }
     else if score >= 60 { "#fbbf24" }
@@ -334,16 +322,11 @@ fn sort_lines_desc(mut lines: Vec<DolibarrBankLine>) -> Vec<DolibarrBankLine> {
     lines
 }
 
-// Action de suppression en attente de confirmation
 #[derive(Clone, PartialEq)]
 enum PendingDelete {
-    Single(String, String),  // id, label
-    All(Vec<String>),        // ids de tous les non-rapproches
+    Single(String, String),
+    All(Vec<String>),
 }
-
-// ============================================================
-//  Page
-// ============================================================
 
 #[component]
 pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
@@ -414,7 +397,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // === Barre d'actions ===
         section { class: "panel",
             div { style: "display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;",
                 div { style: "display: flex; gap: 8px; flex-wrap: wrap;",
@@ -447,7 +429,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // === Section Import CSV ===
         if show_import() {
             section { class: "panel",
                 div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;",
@@ -539,7 +520,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // === Matching proposals ===
         if !proposals().is_empty() {
             section { class: "panel",
                 div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;",
@@ -667,7 +647,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // === Liste des comptes ===
         match &*accounts.read() {
             Some(Ok(accs)) if !accs.is_empty() => {
                 rsx! {
@@ -731,10 +710,9 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
                     div { style: "color: #f87171; font-size: 0.8rem;", {format!("Erreur comptes : {e}")} }
                 }
             },
-            _ => rsx! {}
+            _ => rsx! {},
         }
 
-        // === Mouvements ===
         match &*lines.read() {
             Some(Ok(raw_list)) => {
                 let sorted = sort_lines_desc(raw_list.clone());
@@ -745,7 +723,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
                 let non_rappro_ids: Vec<String> = non_rappro.iter().map(|l| l.id.clone()).collect();
 
                 rsx! {
-                    // --- Section non rapprochés ---
                     section { class: "panel",
                         div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;",
                             div {
@@ -841,7 +818,6 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
                         }
                     }
 
-                    // --- Section déjà rapprochés (collapsible) ---
                     if rappro_count > 0 {
                         section { class: "panel",
                             details {
@@ -896,164 +872,7 @@ pub fn BankingDolibarrPage(refresh: Signal<u64>) -> Element {
                 }
             },
         }
-            Some(Ok(raw_list)) => {
-                let sorted = sort_lines_desc(raw_list.clone());
-                let non_rappro: Vec<DolibarrBankLine> = sorted.iter().filter(|l| l.rappro != 1).cloned().collect();
-                let rappro: Vec<DolibarrBankLine> = sorted.iter().filter(|l| l.rappro == 1).cloned().collect();
-                let non_rappro_count = non_rappro.len();
-                let rappro_count = rappro.len();
-                let non_rappro_ids: Vec<String> = non_rappro.iter().map(|l| l.id.clone()).collect();
 
-                rsx! {
-                    // --- Section 1 : Non rapprochés (derniers imports) ---
-                    section { class: "panel",
-                        div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;",
-                            div {
-                                div { style: "font-size: 0.7rem; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;",
-                                    {format!("Derniers imports ({} non rapproches)", non_rappro_count)}
-                                }
-                                div { style: "font-size: 0.72rem; color: #64748b; margin-top: 2px;",
-                                    "Ces mouvements peuvent etre supprimes tant qu'ils ne sont pas rapproches dans Dolibarr."
-                                }
-                            }
-                            div { style: "display: flex; gap: 8px;",
-                                button {
-                                    style: "padding: 4px 10px; background: transparent; border: 1px solid var(--border); color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 0.7rem;",
-                                    onclick: move |_| bump.with_mut(|v| *v += 1),
-                                    "Rafraichir"
-                                }
-                                if non_rappro_count > 0 {
-                                    button {
-                                        style: "padding: 4px 12px; background: transparent; border: 1px solid #dc2626; color: #f87171; border-radius: 6px; cursor: pointer; font-size: 0.72rem; font-weight: 600;",
-                                        onclick: {
-                                            let ids = non_rappro_ids.clone();
-                                            move |_| {
-                                                if !ids.is_empty() {
-                                                    pending_delete.set(Some(PendingDelete::All(ids.clone())));
-                                                }
-                                            }
-                                        },
-                                        {format!("Supprimer tout ({})", non_rappro_count)}
-                                    }
-                                }
-                            }
-                        }
-
-                        if !bulk_msg().is_empty() {
-                            div { style: "margin-bottom: 8px; color: #94a3b8; font-size: 0.78rem;", "{bulk_msg()}" }
-                        }
-
-                        if non_rappro.is_empty() {
-                            div { style: "padding: 14px; text-align: center; color: #64748b; font-size: 0.8rem; background: var(--bg-input); border: 1px dashed var(--border-strong); border-radius: 8px;",
-                                "Aucun mouvement non rapproche. Tous les flux sont rapproches ou le compte est vide."
-                            }
-                        } else {
-                            div { style: "display: flex; flex-direction: column; gap: 4px;",
-                                for line in non_rappro.iter() {
-                                    {
-                                        let amount = parse_amount_str(&line.amount);
-                                        let is_in = amount >= 0.0;
-                                        let amount_color = if is_in { "#4ade80" } else { "#f87171" };
-                                        let date_str = format_date(line.dateo);
-                                        let label = if line.label.trim().is_empty() { "-".to_string() } else { line.label.clone() };
-                                        let line_id = line.id.clone();
-                                        let line_id_for_key = line_id.clone();
-                                        let line_id_for_del = line_id.clone();
-                                        let label_for_del = label.clone();
-                                        let signed = format_signed_amount(amount);
-                                        rsx! {
-                                            div {
-                                                key: "{line_id_for_key}",
-                                                style: "background: var(--bg-glass); border: 1px solid var(--border); border-left: 3px solid #fbbf24; padding: 8px 12px; border-radius: 8px; display: flex; align-items: center; gap: 10px;",
-                                                div { style: "flex: 1; min-width: 0;",
-                                                    div { style: "font-size: 0.82rem; color: #e2e8f0;", "{label}" }
-                                                    div { style: "font-size: 0.68rem; color: #94a3b8; margin-top: 2px;",
-                                                        span { "{date_str}" }
-                                                        span { style: "color: #334155;", " / " }
-                                                        span { style: "color: #fbbf24;", "Non rapproche" }
-                                                    }
-                                                }
-                                                div { style: "font-size: 0.85rem; color: {amount_color}; font-weight: 600; flex-shrink: 0;",
-                                                    "{signed}"
-                                                }
-                                                button {
-                                                    title: "Supprimer ce mouvement",
-                                                    disabled: busy(),
-                                                    onclick: move |_| {
-                                                        pending_delete.set(Some(PendingDelete::Single(line_id_for_del.clone(), label_for_del.clone())));
-                                                    },
-                                                    style: "padding: 4px 10px; background: transparent; border: 1px solid var(--border); color: #f87171; border-radius: 6px; cursor: pointer; font-size: 0.7rem; font-weight: 600; flex-shrink: 0;",
-                                                    "Suppr"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Section 2 : Déjà rapprochés (lecture seule) ---
-                    if rappro_count > 0 {
-                        section { class: "panel",
-                            div { style: "font-size: 0.7rem; color: #4ade80; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 4px;",
-                                {format!("Deja rapproches ({})", rappro_count)}
-                            }
-                            div { style: "font-size: 0.72rem; color: #64748b; margin-bottom: 12px;",
-                                "Ces mouvements sont proteges et ne peuvent plus etre supprimes."
-                            }
-                            div { style: "display: flex; flex-direction: column; gap: 4px; opacity: 0.65;",
-                                for line in rappro.iter().take(50) {
-                                    {
-                                        let amount = parse_amount_str(&line.amount);
-                                        let is_in = amount >= 0.0;
-                                        let amount_color = if is_in { "#4ade80" } else { "#f87171" };
-                                        let date_str = format_date(line.dateo);
-                                        let label = if line.label.trim().is_empty() { "-".to_string() } else { line.label.clone() };
-                                        let line_id = line.id.clone();
-                                        let signed = format_signed_amount(amount);
-                                        rsx! {
-                                            div {
-                                                key: "{line_id}",
-                                                style: "background: var(--bg-input); border: 1px solid var(--border); padding: 8px 12px; border-radius: 8px; display: flex; align-items: center; gap: 10px;",
-                                                div { style: "flex: 1; min-width: 0;",
-                                                    div { style: "font-size: 0.82rem; color: #cbd5e1;", "{label}" }
-                                                    div { style: "font-size: 0.68rem; color: #64748b; margin-top: 2px;",
-                                                        span { "{date_str}" }
-                                                        span { style: "color: #334155;", " / " }
-                                                        span { style: "color: #4ade80;", "Rapproche" }
-                                                    }
-                                                }
-                                                div { style: "font-size: 0.85rem; color: {amount_color}; font-weight: 600; flex-shrink: 0;",
-                                                    "{signed}"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if rappro_count > 50 {
-                                div { style: "margin-top: 8px; color: #64748b; font-size: 0.72rem; text-align: center;",
-                                    {format!("... et {} autres", rappro_count - 50)}
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            Some(Err(e)) => rsx! {
-                section { class: "panel",
-                    div { style: "color: #f87171; font-size: 0.8rem;", {format!("Erreur mouvements : {e}")} }
-                }
-            },
-            None => rsx! {
-                section { class: "panel",
-                    div { style: "color: #94a3b8;", "Chargement des mouvements..." }
-                }
-            },
-        }
-
-        // === Modale de confirmation ===
         if let Some(action) = pending_delete() {
             div {
                 class: "dash-modal-overlay",

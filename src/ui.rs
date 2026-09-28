@@ -276,7 +276,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 Page::Recovery=>rsx!{RecoveryPage{refresh}},
                 Page::Generation=>rsx!{GenerationPage{refresh}},
                 Page::Calendar=>rsx!{CalendarPage{refresh}},
-                Page::Documents=>rsx!{DocumentsWorkflowPage{refresh}},
+                Page::Documents=>rsx!{crate::ui::dashboard::documents_dolibarr::DocumentsDolibarrPage{refresh}},
                 Page::Automations=>rsx!{AutomationsPage{refresh}},
                 Page::Tasks=>rsx!{TasksPage{refresh}},
                 Page::Audit=>rsx!{AuditPage{refresh}},
