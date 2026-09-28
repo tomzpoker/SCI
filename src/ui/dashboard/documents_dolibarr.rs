@@ -30,6 +30,7 @@ impl DocMode {
 #[derive(Clone, PartialEq)]
 struct CreatedInvoiceInfo {
     id: String,
+    reference: String,
     supplier: String,
     number: String,
     ttc: String,
@@ -87,12 +88,11 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
     let mut file_bytes = use_signal(Vec::<u8>::new);
     let mut url_input = use_signal(String::new);
 
-    // Scan invoice
     let mut parsed = use_signal(|| None::<ParsedInvoice>);
     let mut scan_supplier = use_signal(String::new);
     let mut scan_number = use_signal(String::new);
     let mut scan_date = use_signal(String::new);
-    let mut scan_due_date = use_signal(String::new);   // ⬅️ AJOUT
+    let mut scan_due_date = use_signal(String::new);
     let mut scan_ht = use_signal(String::new);
     let mut scan_tva = use_signal(String::new);
     let mut scan_ttc = use_signal(String::new);
@@ -102,7 +102,6 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
 
     let mut created_info = use_signal(|| None::<CreatedInvoiceInfo>);
 
-    // Upload document
     let mut doc_bien = use_signal(String::new);
     let mut doc_lot = use_signal(String::new);
     let mut doc_tenant = use_signal(String::new);
@@ -141,7 +140,6 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // === Choix du mode ===
         section { class: "panel",
             div { style: "display: flex; gap: 10px; flex-wrap: wrap;",
                 for m in [DocMode::ScanInvoice, DocMode::UploadDocument] {
@@ -169,9 +167,6 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
-        // ============================================================
-        //  MODE 1 : SCAN FACTURE FOURNISSEUR
-        // ============================================================
         if mode() == DocMode::ScanInvoice {
             section { class: "panel",
                 div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;",
@@ -236,9 +231,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                 }
 
                 div { style: "display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border);",
-                    div { style: "font-size: 0.72rem; color: #64748b;",
-                        "Ou depuis une URL :"
-                    }
+                    div { style: "font-size: 0.72rem; color: #64748b;", "Ou depuis une URL :" }
                     input {
                         r#type: "text",
                         placeholder: "https://exemple.com/facture.pdf",
@@ -356,41 +349,25 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                             div { style: "flex: 1;",
                                 label { class: "field",
                                     span { "Total HT" }
-                                    input {
-                                        r#type: "text",
-                                        value: "{scan_ht}",
-                                        oninput: move |e| scan_ht.set(e.value()),
-                                    }
+                                    input { r#type: "text", value: "{scan_ht}", oninput: move |e| scan_ht.set(e.value()) }
                                 }
                             }
                             div { style: "flex: 1;",
                                 label { class: "field",
                                     span { "TVA" }
-                                    input {
-                                        r#type: "text",
-                                        value: "{scan_tva}",
-                                        oninput: move |e| scan_tva.set(e.value()),
-                                    }
+                                    input { r#type: "text", value: "{scan_tva}", oninput: move |e| scan_tva.set(e.value()) }
                                 }
                             }
                             div { style: "flex: 1;",
                                 label { class: "field",
                                     span { "Total TTC" }
-                                    input {
-                                        r#type: "text",
-                                        value: "{scan_ttc}",
-                                        oninput: move |e| scan_ttc.set(e.value()),
-                                    }
+                                    input { r#type: "text", value: "{scan_ttc}", oninput: move |e| scan_ttc.set(e.value()) }
                                 }
                             }
                             div { style: "width: 100px;",
                                 label { class: "field",
                                     span { "Taux TVA %" }
-                                    input {
-                                        r#type: "text",
-                                        value: "{scan_rate}",
-                                        oninput: move |e| scan_rate.set(e.value()),
-                                    }
+                                    input { r#type: "text", value: "{scan_rate}", oninput: move |e| scan_rate.set(e.value()) }
                                 }
                             }
                         }
@@ -492,9 +469,15 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                     match crate::dolibarr::server_fns::dolibarr_create_supplier_invoice(
                                         supplier.clone(), number.clone(), date, due, ht, tva, ttc.clone(), rate, vls, fname.clone(), bytes, sb.clone(), sl.clone()
                                     ).await {
-                                        Ok(invoice_id) => {
+                                        Ok(response) => {
+                                            // Response = "invoice_id|ref"
+                                            let parts: Vec<&str> = response.splitn(2, '|').collect();
+                                            let invoice_id = parts.get(0).unwrap_or(&"").to_string();
+                                            let invoice_ref = parts.get(1).unwrap_or(&"").to_string();
+
                                             created_info.set(Some(CreatedInvoiceInfo {
                                                 id: invoice_id.clone(),
+                                                reference: invoice_ref.clone(),
                                                 supplier: supplier.clone(),
                                                 number: number.clone(),
                                                 ttc: ttc.clone(),
@@ -502,7 +485,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                                 lot: sl.clone(),
                                                 pdf_filename: fname.clone(),
                                             }));
-                                            flash.set(Some((format!("Facture fournisseur creee dans Dolibarr (ID {}).", invoice_id), "success".into())));
+                                            flash.set(Some((format!("Facture fournisseur creee (ID {} / ref {}).", invoice_id, invoice_ref), "success".into())));
                                             parsed.set(None);
                                             file_name.set(String::new());
                                             file_bytes.set(Vec::new());
@@ -542,121 +525,108 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
             }
         }
 
+        // PANNEAU FACTURE CREEE
         if let Some(info) = created_info() {
-            section { class: "panel",
-                style: "background: rgba(74,222,128,0.06); border-color: rgba(74,222,128,0.3);",
-                div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;",
-                    div {
-                        div { style: "font-size: 0.7rem; color: #4ade80; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;",
-                            "Facture creee dans Dolibarr"
-                        }
-                        div { style: "font-size: 0.85rem; color: #e2e8f0; font-weight: 500; margin-top: 4px;",
-                            {format!("{} - {}", info.number, info.supplier)}
-                        }
-                    }
-                    button {
-                        style: "padding: 4px 12px; background: transparent; border: 1px solid var(--border); color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 0.72rem;",
-                        onclick: move |_| created_info.set(None),
-                        "Fermer"
-                    }
-                }
+            {
+                let safe_fname = info.pdf_filename.replace(' ', "_");
+                // Dolibarr attend un chemin RELATIF a dir_output (= /var/www/documents/fournisseur/facture).
+                // Donc le file= doit etre "{ref}/{filename}" SANS prefixe "fournisseur/facture/".
+                let file_param = format!("{}/{}", info.reference, safe_fname)
+                    .replace('/', "%2F");
+                let web_pdf_url = format!(
+                    "http://localhost:8081/document.php?modulepart=facture_fournisseur&file={}",
+                    file_param
+                );
+                let dolibarr_card_url = format!(
+                    "http://localhost:8081/fourn/facture/card.php?facid={}",
+                    info.id
+                );
 
-                div { style: "display: flex; gap: 20px; flex-wrap: wrap;",
-                    div {
-                        div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;",
-                            "Montant TTC"
-                        }
-                        div { style: "font-size: 1.1rem; color: #4ade80; font-weight: 600; margin-top: 4px;",
-                            {format!("{} EUR", info.ttc)}
-                        }
-                    }
-                    div {
-                        div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;",
-                            "ID Dolibarr"
-                        }
-                        div { style: "font-size: 1.1rem; color: #e2e8f0; font-weight: 500; margin-top: 4px;",
-                            "#{info.id}"
-                        }
-                    }
-                    if !info.bien.is_empty() {
-                        div {
-                            div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;",
-                                "Bien rattache"
+                rsx! {
+                    section { class: "panel",
+                        style: "background: rgba(74,222,128,0.06); border-color: rgba(74,222,128,0.3);",
+                        div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;",
+                            div {
+                                div { style: "font-size: 0.7rem; color: #4ade80; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;",
+                                    "Facture creee dans Dolibarr"
+                                }
+                                div { style: "font-size: 0.85rem; color: #e2e8f0; font-weight: 500; margin-top: 4px;",
+                                    {format!("{} - {}", info.number, info.supplier)}
+                                }
                             }
-                            div { style: "font-size: 0.85rem; color: #e2e8f0; margin-top: 4px;",
-                                if info.lot.is_empty() {
-                                    "{info.bien}"
-                                } else {
-                                    {format!("{} - {}", info.bien, info.lot)}
+                            button {
+                                style: "padding: 4px 12px; background: transparent; border: 1px solid var(--border); color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 0.72rem;",
+                                onclick: move |_| created_info.set(None),
+                                "Fermer"
+                            }
+                        }
+
+                        div { style: "display: flex; gap: 20px; flex-wrap: wrap;",
+                            div {
+                                div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;", "Montant TTC" }
+                                div { style: "font-size: 1.1rem; color: #4ade80; font-weight: 600; margin-top: 4px;", {format!("{} EUR", info.ttc)} }
+                            }
+                            div {
+                                div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;", "ID Dolibarr" }
+                                div { style: "font-size: 1.1rem; color: #e2e8f0; font-weight: 500; margin-top: 4px;", "#{info.id}" }
+                            }
+                            if !info.bien.is_empty() {
+                                div {
+                                    div { style: "font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;", "Bien rattache" }
+                                    div { style: "font-size: 0.85rem; color: #e2e8f0; margin-top: 4px;",
+                                        if info.lot.is_empty() { "{info.bien}" } else { {format!("{} - {}", info.bien, info.lot)} }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
 
-                div { style: "display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;",
-                    button {
-                        style: "padding: 8px 16px; background: #7c3aed; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 600;",
-                        onclick: {
-                            let id = info.id.clone();
-                            move |_| {
-                                let url = format!("http://localhost:8081/fourn/facture/card.php?facid={}", id);
-                                let script = format!("window.open('{}', '_blank');", url);
-                                let _ = document::eval(&script);
+                        div { style: "display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;",
+                            button {
+                                style: "padding: 8px 16px; background: #7c3aed; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 600;",
+                                onclick: {
+                                    let url = dolibarr_card_url.clone();
+                                    move |_| {
+                                        let script = format!("window.open('{}', '_blank');", url);
+                                        let _ = document::eval(&script);
+                                    }
+                                },
+                                "Ouvrir la facture dans Dolibarr"
                             }
-                        },
-                        "Voir la facture dans Dolibarr"
-                    }
-                    button {
-                        style: "padding: 8px 16px; background: transparent; color: #a78bfa; border: 1px solid #7c3aed; border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 600;",
-                        onclick: {
-                            let id = info.id.clone();
-                            let fname = info.pdf_filename.clone();
-                            move |_| {
-                                let url = format!(
-                                    "http://localhost:8081/document.php?modulepart=facture_fourn&file=fournisseur%2Ffacture%2F{}%2F{}",
-                                    id,
-                                    fname.replace(' ', "_")
-                                );
-                                let script = format!("window.open('{}', '_blank');", url);
-                                let _ = document::eval(&script);
+                            button {
+                                style: "padding: 8px 16px; background: transparent; color: #a78bfa; border: 1px solid #7c3aed; border-radius: 6px; cursor: pointer; font-size: 0.78rem; font-weight: 600;",
+                                onclick: {
+                                    let url = web_pdf_url.clone();
+                                    move |_| {
+                                        let script = format!("window.open('{}', '_blank');", url);
+                                        let _ = document::eval(&script);
+                                    }
+                                },
+                                "Voir le PDF attache"
                             }
-                        },
-                        "Voir le PDF attache"
+                        }
                     }
                 }
             }
         }
 
-        // ============================================================
-        //  MODE 2 : UPLOAD DOCUMENT
-        // ============================================================
+        // MODE 2 : UPLOAD DOCUMENT
         if mode() == DocMode::UploadDocument {
             section { class: "panel",
                 div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;",
                     "A quoi ce document se rattache-t-il ?"
                 }
-
                 div { style: "display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 14px;",
                     label { style: "display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: #e2e8f0;",
-                        input {
-                            r#type: "checkbox",
-                            checked: "{doc_sci}",
-                            onchange: move |e| doc_sci.set(e.value() == "true"),
-                        }
+                        input { r#type: "checkbox", checked: "{doc_sci}", onchange: move |e| doc_sci.set(e.value() == "true") }
                         "La SCI"
                     }
                 }
-
                 div { style: "display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;",
                     label { class: "field", style: "flex: 1; min-width: 200px;",
                         span { "Un bien (optionnel)" }
                         select {
                             value: "{doc_bien}",
-                            onchange: move |e| {
-                                doc_bien.set(e.value());
-                                doc_lot.set(String::new());
-                            },
+                            onchange: move |e| { doc_bien.set(e.value()); doc_lot.set(String::new()); },
                             option { value: "", "-- Aucun bien specifique --" }
                             for p in properties.read().as_deref().unwrap_or(&[]).iter() {
                                 option { value: "{p.name}", "{p.name}" }
@@ -667,8 +637,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                         label { class: "field", style: "flex: 1; min-width: 200px;",
                             span { "Un lot (optionnel)" }
                             select {
-                                value: "{doc_lot}",
-                                onchange: move |e| doc_lot.set(e.value()),
+                                value: "{doc_lot}", onchange: move |e| doc_lot.set(e.value()),
                                 option { value: "", "-- Tout le bien --" }
                                 for u in units.read().as_deref().unwrap_or(&[]).iter().filter(|u| u.property_name == doc_bien()) {
                                     option { value: "{u.code}", {format!("{} - {}", u.code, u.label)} }
@@ -679,34 +648,22 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                     label { class: "field", style: "flex: 1; min-width: 200px;",
                         span { "Un locataire / tiers (optionnel)" }
                         select {
-                            value: "{doc_tenant}",
-                            onchange: move |e| doc_tenant.set(e.value()),
+                            value: "{doc_tenant}", onchange: move |e| doc_tenant.set(e.value()),
                             option { value: "", "-- Aucun tiers specifique --" }
                             for t in thirds.read().as_ref().and_then(|r| r.as_ref().ok()).cloned().unwrap_or_default().iter() {
-                                if t.name != "Patrimoine SCI" {
-                                    option { value: "{t.id}", "{t.name}" }
-                                }
+                                if t.name != "Patrimoine SCI" { option { value: "{t.id}", "{t.name}" } }
                             }
                         }
                     }
                 }
-
                 label { class: "field",
                     span { "Description (optionnel)" }
-                    input {
-                        r#type: "text",
-                        placeholder: "Ex : Bail signe 2024 - M. Dupont",
-                        value: "{doc_reason}",
-                        oninput: move |e| doc_reason.set(e.value()),
-                    }
+                    input { r#type: "text", placeholder: "Ex : Bail signe 2024 - M. Dupont", value: "{doc_reason}", oninput: move |e| doc_reason.set(e.value()) }
                 }
             }
 
             section { class: "panel",
-                div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;",
-                    "Choisis le fichier"
-                }
-
+                div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;", "Choisis le fichier" }
                 div { style: "display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;",
                     label {
                         style: "display: inline-block; padding: 8px 16px; background: #7c3aed; color: white; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600;",
@@ -732,20 +689,13 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                         }
                     }
                     if !file_name().is_empty() {
-                        div { style: "font-size: 0.78rem; color: #4ade80;",
-                            "{file_name()} ({format_size(file_bytes().len() as i64)})"
-                        }
+                        div { style: "font-size: 0.78rem; color: #4ade80;", "{file_name()} ({format_size(file_bytes().len() as i64)})" }
                     }
                 }
-
                 div { style: "display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border);",
-                    div { style: "font-size: 0.72rem; color: #64748b;",
-                        "Ou depuis une URL :"
-                    }
+                    div { style: "font-size: 0.72rem; color: #64748b;", "Ou depuis une URL :" }
                     input {
-                        r#type: "text",
-                        placeholder: "https://exemple.com/bail.pdf",
-                        value: "{url_input}",
+                        r#type: "text", placeholder: "https://exemple.com/bail.pdf", value: "{url_input}",
                         oninput: move |e| url_input.set(e.value()),
                         style: "flex: 1; min-width: 200px; padding: 6px 12px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: #e2e8f0; font-size: 0.78rem;",
                     }
@@ -753,8 +703,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                         disabled: busy() || url_input().trim().is_empty(),
                         onclick: move |_| {
                             let url = url_input();
-                            busy.set(true);
-                            flash.set(None);
+                            busy.set(true); flash.set(None);
                             spawn(async move {
                                 match crate::dolibarr::server_fns::dolibarr_download_from_url(url).await {
                                     Ok((name, bytes)) => {
@@ -762,9 +711,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                         file_bytes.set(bytes.clone());
                                         flash.set(Some((format!("Fichier '{}' telecharge ({}).", name, format_size(bytes.len() as i64)), "success".into())));
                                     }
-                                    Err(e) => {
-                                        flash.set(Some((format!("Erreur URL : {}", e), "error".into())));
-                                    }
+                                    Err(e) => { flash.set(Some((format!("Erreur URL : {}", e), "error".into()))); }
                                 }
                                 busy.set(false);
                             });
@@ -773,12 +720,10 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                         "Charger depuis l'URL"
                     }
                 }
-
                 if !file_bytes().is_empty() {
                     div { style: "display: flex; gap: 8px; margin-top: 14px;",
                         button {
-                            class: "primary",
-                            disabled: busy(),
+                            class: "primary", disabled: busy(),
                             onclick: move |_| {
                                 let fname = file_name();
                                 let bytes = file_bytes();
@@ -787,54 +732,30 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                 let tenant_id = doc_tenant();
                                 let reason = doc_reason();
                                 let sci = doc_sci();
-                                busy.set(true);
-                                flash.set(None);
+                                busy.set(true); flash.set(None);
                                 spawn(async move {
                                     let (bien_name_for_upload, lot_code_for_upload) = if !bien.is_empty() {
                                         (bien.clone(), lot.clone())
                                     } else {
                                         ("Divers".to_string(), String::new())
                                     };
-
                                     let result = crate::dolibarr::server_fns::dolibarr_upload_patrimoine_document(
-                                        bien_name_for_upload,
-                                        lot_code_for_upload,
-                                        fname.clone(),
-                                        bytes,
+                                        bien_name_for_upload, lot_code_for_upload, fname.clone(), bytes,
                                     ).await;
-
                                     let final_name = match result {
                                         Ok(n) => n,
-                                        Err(e) => {
-                                            flash.set(Some((format!("Erreur upload : {}", e), "error".into())));
-                                            busy.set(false);
-                                            return;
-                                        }
+                                        Err(e) => { flash.set(Some((format!("Erreur upload : {}", e), "error".into()))); busy.set(false); return; }
                                     };
-
                                     let ecm_id = crate::dolibarr::server_fns::dolibarr_get_last_ecm_id().await.unwrap_or(0);
-
                                     if ecm_id > 0 && !tenant_id.is_empty() {
-                                        let _ = crate::dolibarr::server_fns::dolibarr_link_document(
-                                            ecm_id, tenant_id.clone(), "societe".to_string()
-                                        ).await;
+                                        let _ = crate::dolibarr::server_fns::dolibarr_link_document(ecm_id, tenant_id.clone(), "societe".to_string()).await;
                                     }
-
                                     let mut msg = format!("Document '{}' depose.", final_name);
-                                    if !reason.is_empty() {
-                                        msg = format!("{} Description : {}", msg, reason);
-                                    }
-                                    if !bien.is_empty() {
-                                        msg = format!("{} Rattaché au bien : {}", msg, bien);
-                                    }
-                                    if !tenant_id.is_empty() {
-                                        msg = format!("{} + lien vers le tiers.", msg);
-                                    }
-                                    if sci && bien.is_empty() && tenant_id.is_empty() {
-                                        msg = format!("{} Rattaché à la SCI.", msg);
-                                    }
+                                    if !reason.is_empty() { msg = format!("{} Description : {}", msg, reason); }
+                                    if !bien.is_empty() { msg = format!("{} Rattaché au bien : {}", msg, bien); }
+                                    if !tenant_id.is_empty() { msg = format!("{} + lien vers le tiers.", msg); }
+                                    if sci && bien.is_empty() && tenant_id.is_empty() { msg = format!("{} Rattaché à la SCI.", msg); }
                                     flash.set(Some((msg, "success".into())));
-
                                     file_name.set(String::new());
                                     file_bytes.set(Vec::new());
                                     url_input.set(String::new());
@@ -862,19 +783,14 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
 
             section { class: "panel",
                 div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;",
-                    div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;",
-                        "Documents existants"
-                    }
+                    div { style: "font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em;", "Documents existants" }
                     button {
                         style: "padding: 4px 10px; background: transparent; border: 1px solid var(--border); color: #94a3b8; border-radius: 6px; cursor: pointer; font-size: 0.7rem;",
                         disabled: busy() || doc_bien().is_empty(),
                         onclick: {
                             let bname = doc_bien();
                             move |_| {
-                                if bname.is_empty() {
-                                    flash.set(Some(("Choisis d'abord un bien pour filtrer.".into(), "error".into())));
-                                    return;
-                                }
+                                if bname.is_empty() { flash.set(Some(("Choisis d'abord un bien pour filtrer.".into(), "error".into()))); return; }
                                 let b = bname.clone();
                                 busy.set(true);
                                 spawn(async move {
@@ -882,11 +798,8 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                         Ok(list) => {
                                             let n = list.len();
                                             docs.set(list);
-                                            if n == 0 {
-                                                flash.set(Some(("Aucun document pour ce bien.".into(), "error".into())));
-                                            } else {
-                                                flash.set(Some((format!("{} document(s).", n), "success".into())));
-                                            }
+                                            if n == 0 { flash.set(Some(("Aucun document pour ce bien.".into(), "error".into()))); }
+                                            else { flash.set(Some((format!("{} document(s).", n), "success".into()))); }
                                         }
                                         Err(e) => flash.set(Some((format!("Erreur : {}", e), "error".into()))),
                                     }
@@ -897,7 +810,6 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                         "Voir les documents du bien sélectionné"
                     }
                 }
-
                 if docs().is_empty() {
                     div { style: "padding: 14px; text-align: center; color: #64748b; font-size: 0.78rem; background: var(--bg-input); border: 1px dashed var(--border-strong); border-radius: 8px;",
                         "Sélectionne un bien et clique sur « Voir les documents » pour les afficher."
@@ -917,10 +829,7 @@ pub fn DocumentsDolibarrPage(refresh: Signal<u64>) -> Element {
                                     div {
                                         key: "{key}",
                                         style: "background: var(--bg-glass); border: 1px solid var(--border); padding: 10px 14px; border-radius: 8px; display: flex; align-items: center; gap: 12px;",
-                                        span {
-                                            style: "width: 40px; height: 40px; flex-shrink: 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: rgba(148,163,184,0.08); color: #94a3b8; font-size: 0.7rem; font-weight: 700;",
-                                            "{icon}"
-                                        }
+                                        span { style: "width: 40px; height: 40px; flex-shrink: 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: rgba(148,163,184,0.08); color: #94a3b8; font-size: 0.7rem; font-weight: 700;", "{icon}" }
                                         div { style: "flex: 1; min-width: 0;",
                                             div { style: "font-size: 0.84rem; color: #e2e8f0; font-weight: 500;", "{fname}" }
                                             div { style: "font-size: 0.68rem; color: #94a3b8; margin-top: 2px;",

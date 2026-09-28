@@ -8,6 +8,27 @@ fn parse_eur(s: &str) -> f64 {
     s.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0)
 }
 
+/// Genere une ref "safe" pour Dolibarr (path + SQL + URL).
+#[cfg(feature = "server")]
+fn sanitize_ref(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        format!("FOURN-{}", chrono::Utc::now().timestamp())
+    } else {
+        trimmed
+    }
+}
+
 #[cfg(feature = "server")]
 async fn write_file_in_container(
     container_dir: &str,
@@ -81,7 +102,6 @@ async fn ecm_file_exists(rel_filepath: &str, filename: &str) -> Result<bool, Ser
 }
 
 /// Renvoie un nom de fichier libre (ajoute _2, _3... si necessaire).
-/// Retourne (nouveau_nom_fichier, chemin_relatif_final).
 #[cfg(feature = "server")]
 async fn find_available_name(
     rel_dir: &str,
@@ -485,7 +505,6 @@ pub async fn dolibarr_upload_document_sql(
             _ => return Err(ServerFnError::new(format!("modulepart inconnu : {}", modulepart))),
         };
 
-        // Trouve un nom dispo (auto-renommage si collision)
         let final_filename = find_available_name(&rel_dir, &base_filename).await?;
         let rel_filepath = format!("{}/{}", rel_dir, final_filename);
         let container_dir = format!("/var/www/documents/{}", rel_dir);
@@ -596,7 +615,6 @@ pub async fn dolibarr_upload_patrimoine_document(
             format!("societe/Patrimoine_SCI/{}/{}", bien_clean, lot_clean)
         };
 
-        // Auto-renommage si collision
         let final_filename = find_available_name(&rel_dir, &base_filename).await?;
         let rel_filepath = format!("{}/{}", rel_dir, final_filename);
         let container_dir = format!("/var/www/documents/{}", rel_dir);
@@ -740,7 +758,6 @@ use crate::dolibarr::invoice_parser::ParsedInvoice;
 use crate::dolibarr::invoice_parser::{extract_text_from_pdf, parse_invoice_text};
 
 /// Analyse un PDF de facture fournisseur et retourne les champs extraits.
-/// L'utilisateur devra valider avant qu'on pousse dans Dolibarr.
 #[server]
 pub async fn dolibarr_parse_invoice_pdf(
     filename: String,
@@ -758,16 +775,15 @@ pub async fn dolibarr_parse_invoice_pdf(
     Err(ServerFnError::new("dolibarr_parse_invoice_pdf est executee cote serveur"))
 }
 
-/// Cree une facture fournisseur dans Dolibarr (SQL direct, car l'API REST
-/// ne couvre pas correctement ce module dans Dolibarr 19).
-/// Gere multi-taux TVA : une ligne de facture par taux detecte.
+/// Cree une facture fournisseur dans Dolibarr.
+/// Retourne une string "{invoice_id}|{invoice_ref}".
 #[server]
 pub async fn dolibarr_create_supplier_invoice(
     supplier_name: String,
     invoice_number: String,
-    invoice_date: String,   // AAAA-MM-JJ
-    due_date: String,       // AAAA-MM-JJ (peut etre vide)
-    total_ht: String,       // "123.45"
+    invoice_date: String,
+    due_date: String,
+    total_ht: String,
     total_tva: String,
     total_ttc: String,
     tva_rate: String,
@@ -827,12 +843,10 @@ pub async fn dolibarr_create_supplier_invoice(
             found.parse().map_err(|_| ServerFnError::new("ID fournisseur invalide"))?
         };
 
-        // 2. Montants en EUROS (Dolibarr 19 stocke les montants en euros, pas centimes)
         let ht_eur = parse_eur(&total_ht);
         let tva_eur = parse_eur(&total_tva);
         let ttc_eur = parse_eur(&total_ttc);
 
-        // 3. Note privee
         let mut note_parts: Vec<String> = Vec::new();
         if !bien_name.trim().is_empty() {
             note_parts.push(format!("Bien: {}", bien_name.trim()));
@@ -843,12 +857,14 @@ pub async fn dolibarr_create_supplier_invoice(
         note_parts.push("Source: OCR app SCI Family".to_string());
         let note_private = note_parts.join(" | ").replace('\'', "''");
 
-        // 4. Ref facture (auto si vide)
-        let ref_safe = if invoice_number.trim().is_empty() {
+        // 4. Ref facture - GENERE UNE SEULE FOIS
+        let final_ref: String = if invoice_number.trim().is_empty() {
             format!("FOURN-{}", chrono::Utc::now().timestamp())
         } else {
-            invoice_number.replace('\'', "''")
+            sanitize_ref(invoice_number.trim())
         };
+        let ref_safe = final_ref.replace('\'', "''");
+
         let date_safe = if invoice_date.is_empty() {
             "CURRENT_DATE".to_string()
         } else {
@@ -879,7 +895,6 @@ pub async fn dolibarr_create_supplier_invoice(
             )));
         }
 
-        // 6. Recupere l'ID via SELECT (plus fiable que RETURNING)
         let sql_get_inv = format!(
             "SELECT rowid FROM llx_facture_fourn WHERE entity=1 AND ref = '{}' ORDER BY rowid DESC LIMIT 1;",
             ref_safe
@@ -892,7 +907,7 @@ pub async fn dolibarr_create_supplier_invoice(
         let invoice_id: i64 = String::from_utf8_lossy(&get_out.stdout).trim().parse::<i64>()
             .map_err(|_| ServerFnError::new("ID facture fournisseur introuvable"))?;
 
-        // 7. Lignes facture - une par taux TVA
+        // 7. Lignes facture
         if !vat_lines.is_empty() {
             for vl in vat_lines.iter() {
                 let base_e = parse_eur(&vl.base_ht);
@@ -929,7 +944,7 @@ pub async fn dolibarr_create_supplier_invoice(
                 .await;
         }
 
-        // 8. Attache le PDF
+        // 8. Attache le PDF - chemin : fournisseur/facture/{ref}/{filename}
         let safe_filename: String = file_name
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' ')
@@ -937,14 +952,20 @@ pub async fn dolibarr_create_supplier_invoice(
             .trim()
             .replace(' ', "_");
 
-        let rel_dir = format!("fournisseur/facture/{}/", invoice_id);
+        let safe_filename = if safe_filename.is_empty() {
+            "facture.pdf".to_string()
+        } else {
+            safe_filename
+        };
+
+        let rel_dir = format!("fournisseur/facture/{}", final_ref);
         let container_dir = format!("/var/www/documents/{}", rel_dir);
-        let container_filepath = format!("/var/www/documents/{}{}", rel_dir, safe_filename);
+        let container_filepath = format!("{}/{}", container_dir, safe_filename);
 
         write_file_in_container(&container_dir, &container_filepath, &file_bytes, &safe_filename).await?;
 
         let esc_filename = safe_filename.replace('\'', "''");
-        let esc_filepath = format!("{}{}", rel_dir, safe_filename).replace('\'', "''");
+        let esc_filepath = format!("{}/{}", rel_dir, safe_filename).replace('\'', "''");
 
         let sql_ecm = format!(
             "INSERT INTO llx_ecm_files (filename, filepath, date_c, entity, gen_or_uploaded, label) \
@@ -979,19 +1000,18 @@ pub async fn dolibarr_create_supplier_invoice(
                 .await;
         }
 
-        Ok(invoice_id.to_string())
+        // 10. Retour "id|ref"
+        Ok(format!("{}|{}", invoice_id, final_ref))
     }
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_create_supplier_invoice est executee cote serveur"))
 }
 
-/// Ajoute un lien supplementaire a un fichier ECM deja existant.
-/// Permet de rattacher un document a plusieurs entites (ex : bien + locataire).
 #[server]
 pub async fn dolibarr_link_document(
     ecm_file_id: i64,
     target_id: String,
-    target_type: String,   // "societe", "facture", "facture_fourn"
+    target_type: String,
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -1022,7 +1042,6 @@ pub async fn dolibarr_link_document(
     Err(ServerFnError::new("dolibarr_link_document est executee cote serveur"))
 }
 
-/// Retourne l'ID du dernier fichier ECM insere (pour creer des liens apres upload).
 #[server]
 pub async fn dolibarr_get_last_ecm_id() -> Result<i64, ServerFnError> {
     #[cfg(feature = "server")]
@@ -1040,8 +1059,6 @@ pub async fn dolibarr_get_last_ecm_id() -> Result<i64, ServerFnError> {
     Err(ServerFnError::new("dolibarr_get_last_ecm_id est executee cote serveur"))
 }
 
-/// Telecharge un fichier depuis une URL et renvoie (filename, bytes).
-/// Limite : 25 Mo max.
 #[server]
 pub async fn dolibarr_download_from_url(
     url: String,
@@ -1075,7 +1092,6 @@ pub async fn dolibarr_download_from_url(
             )));
         }
 
-        // Taille max : 25 Mo
         const MAX_SIZE: usize = 25 * 1024 * 1024;
         if let Some(len) = resp.content_length() {
             if len as usize > MAX_SIZE {
@@ -1086,7 +1102,6 @@ pub async fn dolibarr_download_from_url(
             }
         }
 
-        // Nom de fichier : extrait depuis l'URL ou depuis Content-Disposition
         let content_disposition = resp
             .headers()
             .get("content-disposition")
@@ -1116,7 +1131,6 @@ pub async fn dolibarr_download_from_url(
 
 #[cfg(feature = "server")]
 fn extract_filename_from_response(url: &str, content_disposition: Option<&str>) -> String {
-    // 1. Content-Disposition : filename="xxx.pdf" ou filename=xxx.pdf
     if let Some(cd) = content_disposition {
         let cd_lower = cd.to_lowercase();
         if cd_lower.contains("filename=") {
@@ -1137,14 +1151,12 @@ fn extract_filename_from_response(url: &str, content_disposition: Option<&str>) 
         }
     }
 
-    // 2. Dernier segment de l'URL (avant eventuels parametres ?xxx)
     let without_query = url.split('?').next().unwrap_or(url);
     let segment = without_query.split('/').next_back().unwrap_or("");
     if !segment.is_empty() && segment.contains('.') {
         return sanitize_filename(segment);
     }
 
-    // 3. Fallback : nom generique horodate
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     format!("fichier_{}.pdf", ts)
 }
