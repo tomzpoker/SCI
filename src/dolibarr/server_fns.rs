@@ -3,6 +3,10 @@ use crate::dolibarr::models::{
     DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrDocument,
     DolibarrInvoice, DolibarrPayment, DolibarrThirdParty,
 };
+#[cfg(feature = "server")]
+fn parse_eur(s: &str) -> f64 {
+    s.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0)
+}
 
 #[cfg(feature = "server")]
 async fn write_file_in_container(
@@ -756,27 +760,31 @@ pub async fn dolibarr_parse_invoice_pdf(
 
 /// Cree une facture fournisseur dans Dolibarr (SQL direct, car l'API REST
 /// ne couvre pas correctement ce module dans Dolibarr 19).
+/// Gere multi-taux TVA : une ligne de facture par taux detecte.
 #[server]
 pub async fn dolibarr_create_supplier_invoice(
     supplier_name: String,
     invoice_number: String,
     invoice_date: String,   // AAAA-MM-JJ
+    due_date: String,       // AAAA-MM-JJ (peut etre vide)
     total_ht: String,       // "123.45"
     total_tva: String,
     total_ttc: String,
     tva_rate: String,
+    vat_lines: Vec<crate::dolibarr::invoice_parser::VatLine>,
     file_name: String,
     file_bytes: Vec<u8>,
+    bien_name: String,
+    lot_code: String,
 ) -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        // 1. Verifie qu'on a bien un tiers fournisseur (ou on le cree)
+        // 1. Tiers fournisseur
         let safe_supplier = supplier_name.replace('\'', "''").trim().to_string();
         if safe_supplier.is_empty() {
             return Err(ServerFnError::new("Nom du fournisseur manquant"));
         }
 
-        // Cherche le tiers existant (client=0, fournisseur=1)
         let sql_find = format!(
             "SELECT rowid FROM llx_societe WHERE entity=1 AND nom = '{}' AND fournisseur = 1 LIMIT 1;",
             safe_supplier
@@ -789,7 +797,6 @@ pub async fn dolibarr_create_supplier_invoice(
         let found = String::from_utf8_lossy(&find_out.stdout).trim().to_string();
 
         let supplier_id: i64 = if found.is_empty() {
-            // Cree le fournisseur
             let sql_create = format!(
                 "INSERT INTO llx_societe (nom, entity, client, fournisseur, status, datec) \
                  VALUES ('{}', 1, 0, 1, 1, NOW()) RETURNING rowid;",
@@ -800,33 +807,67 @@ pub async fn dolibarr_create_supplier_invoice(
                 .output()
                 .await
                 .map_err(|e| ServerFnError::new(format!("Erreur SQL create supplier : {}", e)))?;
-            String::from_utf8_lossy(&create_out.stdout)
-                .trim()
-                .parse()
-                .map_err(|_| ServerFnError::new("Impossible de creer le fournisseur"))?
+            let sid_str = String::from_utf8_lossy(&create_out.stdout).trim().to_string();
+            if let Ok(n) = sid_str.parse::<i64>() {
+                n
+            } else {
+                let sql_get_soc = format!(
+                    "SELECT rowid FROM llx_societe WHERE entity=1 AND nom = '{}' AND fournisseur = 1 ORDER BY rowid DESC LIMIT 1;",
+                    safe_supplier
+                );
+                let get_out = tokio::process::Command::new("docker")
+                    .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_get_soc])
+                    .output()
+                    .await
+                    .map_err(|e| ServerFnError::new(format!("Erreur SQL get soc : {}", e)))?;
+                String::from_utf8_lossy(&get_out.stdout).trim().parse::<i64>()
+                    .map_err(|_| ServerFnError::new("Impossible de creer le fournisseur"))?
+            }
         } else {
             found.parse().map_err(|_| ServerFnError::new("ID fournisseur invalide"))?
         };
 
-        // 2. Convertit les montants en centimes
-        let ht_cents = (total_ht.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
-        let tva_cents = (total_tva.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
-        let ttc_cents = (total_ttc.parse::<f64>().unwrap_or(0.0) * 100.0).round() as i64;
+        // 2. Montants en EUROS (Dolibarr 19 stocke les montants en euros, pas centimes)
+        let ht_eur = parse_eur(&total_ht);
+        let tva_eur = parse_eur(&total_tva);
+        let ttc_eur = parse_eur(&total_ttc);
 
-        // 3. Cree la facture fournisseur dans llx_facture_fourn
-        let ref_safe = invoice_number.replace('\'', "''");
+        // 3. Note privee
+        let mut note_parts: Vec<String> = Vec::new();
+        if !bien_name.trim().is_empty() {
+            note_parts.push(format!("Bien: {}", bien_name.trim()));
+        }
+        if !lot_code.trim().is_empty() {
+            note_parts.push(format!("Lot: {}", lot_code.trim()));
+        }
+        note_parts.push("Source: OCR app SCI Family".to_string());
+        let note_private = note_parts.join(" | ").replace('\'', "''");
+
+        // 4. Ref facture (auto si vide)
+        let ref_safe = if invoice_number.trim().is_empty() {
+            format!("FOURN-{}", chrono::Utc::now().timestamp())
+        } else {
+            invoice_number.replace('\'', "''")
+        };
         let date_safe = if invoice_date.is_empty() {
             "CURRENT_DATE".to_string()
         } else {
             format!("'{}'", invoice_date.replace('\'', "''"))
         };
+        let due_date_safe = if due_date.is_empty() {
+            "NULL".to_string()
+        } else {
+            format!("'{}'", due_date.replace('\'', "''"))
+        };
+
+        // 5. INSERT facture fournisseur
         let sql_inv = format!(
-            "INSERT INTO llx_facture_fourn (ref, ref_supplier, entity, fk_soc, datec, datef, total_ht, total_tva, total_ttc, fk_statut, paye, tva_intra) \
-             VALUES ('{}', '{}', 1, {}, NOW(), {}, {}, {}, {}, 0, 0, '') RETURNING rowid;",
-            ref_safe, ref_safe, supplier_id, date_safe, ht_cents, tva_cents, ttc_cents
+            "INSERT INTO llx_facture_fourn (ref, ref_supplier, entity, fk_soc, datec, datef, date_lim_reglement, total_ht, total_tva, total_ttc, fk_statut, paye, note_private) \
+             VALUES ('{}', '{}', 1, {}, NOW(), {}, {}, {}, {}, {}, 0, 0, '{}');",
+            ref_safe, ref_safe, supplier_id, date_safe, due_date_safe, ht_eur, tva_eur, ttc_eur, note_private
         );
         let inv_out = tokio::process::Command::new("docker")
-            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_inv])
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_inv])
             .output()
             .await
             .map_err(|e| ServerFnError::new(format!("Erreur SQL facture : {}", e)))?;
@@ -838,25 +879,57 @@ pub async fn dolibarr_create_supplier_invoice(
             )));
         }
 
-        let invoice_id: i64 = String::from_utf8_lossy(&inv_out.stdout)
-            .trim()
-            .parse()
+        // 6. Recupere l'ID via SELECT (plus fiable que RETURNING)
+        let sql_get_inv = format!(
+            "SELECT rowid FROM llx_facture_fourn WHERE entity=1 AND ref = '{}' ORDER BY rowid DESC LIMIT 1;",
+            ref_safe
+        );
+        let get_out = tokio::process::Command::new("docker")
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-t", "-A", "-c", &sql_get_inv])
+            .output()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Erreur SQL get inv : {}", e)))?;
+        let invoice_id: i64 = String::from_utf8_lossy(&get_out.stdout).trim().parse::<i64>()
             .map_err(|_| ServerFnError::new("ID facture fournisseur introuvable"))?;
 
-        // 4. Ligne de facture
-        let sql_line = format!(
-            "INSERT INTO llx_facture_fourn_det (fk_facture_fourn, description, qty, tva_tx, total_ht, total_tva, total_ttc) \
-             VALUES ({}, 'Ligne importee automatiquement', 1, {}, {}, {}, {});",
-            invoice_id,
-            tva_rate.parse::<f64>().unwrap_or(20.0),
-            ht_cents, tva_cents, ttc_cents
-        );
-        let _ = tokio::process::Command::new("docker")
-            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_line])
-            .output()
-            .await;
+        // 7. Lignes facture - une par taux TVA
+        if !vat_lines.is_empty() {
+            for vl in vat_lines.iter() {
+                let base_e = parse_eur(&vl.base_ht);
+                let tva_e = parse_eur(&vl.amount_tva);
+                let ttc_e = if !vl.amount_ttc.is_empty() {
+                    parse_eur(&vl.amount_ttc)
+                } else {
+                    base_e + tva_e
+                };
+                let rate: f64 = parse_eur(&vl.rate);
+                let label = format!("Ligne TVA {}%", vl.rate);
 
-        // 5. Attache le PDF
+                let sql_line = format!(
+                    "INSERT INTO llx_facture_fourn_det (fk_facture_fourn, description, qty, tva_tx, total_ht, total_tva, total_ttc) \
+                     VALUES ({}, '{}', 1, {}, {}, {}, {});",
+                    invoice_id, label.replace('\'', "''"), rate, base_e, tva_e, ttc_e
+                );
+                let _ = tokio::process::Command::new("docker")
+                    .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_line])
+                    .output()
+                    .await;
+            }
+        } else {
+            let rate: f64 = parse_eur(&tva_rate);
+            let rate = if rate == 0.0 { 20.0 } else { rate };
+            let sql_line = format!(
+                "INSERT INTO llx_facture_fourn_det (fk_facture_fourn, description, qty, tva_tx, total_ht, total_tva, total_ttc) \
+                 VALUES ({}, 'Ligne importee automatiquement', 1, {}, {}, {}, {});",
+                invoice_id, rate, ht_eur, tva_eur, ttc_eur
+            );
+            let _ = tokio::process::Command::new("docker")
+                .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql_line])
+                .output()
+                .await;
+        }
+
+        // 8. Attache le PDF
         let safe_filename: String = file_name
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' ')
@@ -883,7 +956,7 @@ pub async fn dolibarr_create_supplier_invoice(
             .output()
             .await;
 
-        // 6. Lien ecmfile -> facture_fourn
+        // 9. Lien ecmfile -> facture_fourn
         let sql_get_id = format!(
             "SELECT rowid FROM llx_ecm_files WHERE filepath = '{}' ORDER BY rowid DESC LIMIT 1;",
             esc_filepath
