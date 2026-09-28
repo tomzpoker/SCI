@@ -59,3 +59,12 @@ db_backup/
 *.sql.gz
 dump_*.sql
 backup_*.sql
+
+# Fichiers imports
+*.csv
+!migrations/*.csv
+!fixtures/*.csv
+!tests/fixtures/*.csv
+
+# Backups locaux de sprints
+.backup-*/

@@ -28,10 +28,6 @@ impl DolibarrClient {
         })
     }
 
-    // ------------------------------------------------------------------------
-    //  Helpers HTTP
-    // ------------------------------------------------------------------------
-
     async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
         let url = format!("{}/api/index.php/{}", self.base_url, path);
         let resp = self.http
@@ -140,7 +136,6 @@ impl DolibarrClient {
         None
     }
 
-    /// Convertit une valeur JSON (string, number, null) en String.
     fn json_to_string(v: Option<&serde_json::Value>) -> String {
         match v {
             Some(serde_json::Value::String(s)) => s.clone(),
@@ -150,7 +145,6 @@ impl DolibarrClient {
         }
     }
 
-    /// Convertit une valeur JSON (string, number, null) en i64.
     fn json_to_i64(v: Option<&serde_json::Value>) -> i64 {
         match v {
             Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
@@ -167,9 +161,7 @@ impl DolibarrClient {
         }
     }
 
-    // ------------------------------------------------------------------------
-    //  FACTURES - lecture
-    // ------------------------------------------------------------------------
+    // FACTURES - lecture
 
     pub async fn list_invoices(&self, limit: u32) -> Result<Vec<DolibarrInvoice>, String> {
         let path = format!("invoices?limit={}&sortfield=t.datec&sortorder=DESC", limit);
@@ -184,9 +176,7 @@ impl DolibarrClient {
         self.get_json(&format!("invoices/{}/lines", id)).await
     }
 
-    // ------------------------------------------------------------------------
-    //  FACTURES - ecriture
-    // ------------------------------------------------------------------------
+    // FACTURES - ecriture
 
     pub async fn create_invoice(
         &self,
@@ -213,9 +203,7 @@ impl DolibarrClient {
         Ok(())
     }
 
-    // ------------------------------------------------------------------------
-    //  PAIEMENTS
-    // ------------------------------------------------------------------------
+    // PAIEMENTS
 
     pub async fn list_payments_for_invoice(
         &self,
@@ -253,9 +241,7 @@ impl DolibarrClient {
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
     }
 
-    // ------------------------------------------------------------------------
-    //  TIERS
-    // ------------------------------------------------------------------------
+    // TIERS
 
     pub async fn list_third_parties(&self, limit: u32) -> Result<Vec<DolibarrThirdParty>, String> {
         let path = format!("thirdparties?limit={}&sortfield=t.nom&sortorder=ASC", limit);
@@ -331,9 +317,7 @@ impl DolibarrClient {
         self.delete_json(&format!("thirdparties/{}", id)).await
     }
 
-    // ------------------------------------------------------------------------
-    //  BANQUE
-    // ------------------------------------------------------------------------
+    // BANQUE
 
     pub async fn list_bank_accounts(&self) -> Result<Vec<DolibarrBankAccount>, String> {
         let url = format!("{}/api/index.php/bankaccounts", self.base_url);
@@ -441,6 +425,39 @@ impl DolibarrClient {
         let path = format!("bankaccounts/{}/lines", account_id);
         let resp: serde_json::Value = self.post_json(&path, draft).await?;
         Ok(Self::extract_id(&resp).unwrap_or_else(|| resp.to_string()))
+    }
+
+    /// Supprime une ligne bancaire dans Dolibarr.
+    /// Essaie plusieurs endpoints car Dolibarr n'a pas de chemin standard.
+    pub async fn delete_bank_line(
+        &self,
+        account_id: &str,
+        line_id: &str,
+    ) -> Result<(), String> {
+        // Essai 1 : /banklines/{id}
+        let r1 = self.delete_json(&format!("banklines/{}", line_id)).await;
+        if r1.is_ok() {
+            return Ok(());
+        }
+
+        // Essai 2 : /bankaccounts/{id}/lines/{line_id}
+        let r2 = self.delete_json(&format!("bankaccounts/{}/lines/{}", account_id, line_id)).await;
+        if r2.is_ok() {
+            return Ok(());
+        }
+
+        // Essai 3 : /bankaccounts/{id}/line/{line_id}
+        let r3 = self.delete_json(&format!("bankaccounts/{}/line/{}", account_id, line_id)).await;
+        if r3.is_ok() {
+            return Ok(());
+        }
+
+        // Aucun endpoint n'a marché, on remonte l'erreur la plus parlante
+        let e2 = r2.err().unwrap_or_default();
+        Err(format!(
+            "Aucun endpoint DELETE n'a fonctionne. Derniere erreur : {}",
+            e2
+        ))
     }
 }
 
