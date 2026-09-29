@@ -4,6 +4,12 @@ use sci_family_pilot::server;
 use sci_family_pilot::ui::App;
 
 fn main() {
+    // Charge le .env AVANT tout (variables Gmail, DB, etc.)
+    #[cfg(feature = "server")]
+    {
+        let _ = dotenvy::dotenv();
+    }
+
     observability::init();
 
     #[cfg(feature = "server")]

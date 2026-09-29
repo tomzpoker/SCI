@@ -9,7 +9,17 @@ description = "Pilotage administratif automatisé d'une SCI familiale à l'IR"
 default = ["web"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:sqlx", "dep:tokio", "dep:dotenvy", "dep:tracing-subscriber", "dep:reqwest"]
+server = [
+    "dioxus/server",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:dotenvy",
+    "dep:tracing-subscriber",
+    "dep:reqwest",
+    "dep:imap",
+    "dep:mail-parser",
+    "dep:native-tls",
+]
 test-auth = []
 
 [dependencies]
@@ -33,6 +43,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 base64 = "0.22"
 pdf-extract = "0.7"
 regex = "1"
+imap = { version = "2.4", optional = true }
+mail-parser = { version = "0.9", optional = true }
+native-tls = { version = "0.2", optional = true }
 
 [profile.dev]
 opt-level = 0

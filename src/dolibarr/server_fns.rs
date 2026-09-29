@@ -3,6 +3,8 @@ use crate::dolibarr::models::{
     DolibarrBankAccount, DolibarrBankLine, DolibarrBankLineDraft, DolibarrDocument,
     DolibarrInvoice, DolibarrPayment, DolibarrThirdParty,
 };
+use crate::email::EmailFacture;
+
 #[cfg(feature = "server")]
 fn parse_eur(s: &str) -> f64 {
     s.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0)
@@ -131,16 +133,13 @@ async fn find_available_name(
 // ============================================================
 
 /// Convertit un PDF en PNG via pdftoppm puis lance Tesseract (fra) sur chaque page.
-/// Renvoie le texte OCR de toutes les pages concatene.
 #[cfg(feature = "server")]
 async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
-    // 1. Ecrit le PDF dans un fichier temporaire local
     let tmp_path = std::env::temp_dir().join("doli_ocr_input.pdf");
     tokio::fs::write(&tmp_path, &bytes)
         .await
         .map_err(|e| format!("Erreur write temp OCR : {}", e))?;
 
-    // 2. Copie le PDF dans le conteneur
     let cp = tokio::process::Command::new("docker")
         .args([
             "cp",
@@ -159,7 +158,6 @@ async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
         ));
     }
 
-    // 3. pdftoppm : PDF -> PNG (300 dpi)
     let pp = tokio::process::Command::new("docker")
         .args([
             "exec",
@@ -179,7 +177,6 @@ async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
         ));
     }
 
-    // 4. Tesseract sur toutes les pages, puis concat
     let tess = tokio::process::Command::new("docker")
         .args([
             "exec",
@@ -203,7 +200,6 @@ async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
     Ok(text)
 }
 
-/// Server fn publique : OCR d'un PDF (fallback manuel si besoin).
 #[server]
 pub async fn dolibarr_ocr_pdf(bytes: Vec<u8>) -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
@@ -483,17 +479,7 @@ pub async fn dolibarr_delete_bank_lines(
         );
 
         let output = tokio::process::Command::new("docker")
-            .args([
-                "exec",
-                "sci-family-dolibarr-db",
-                "psql",
-                "-U",
-                "dolibarr",
-                "-d",
-                "dolibarr",
-                "-c",
-                &sql,
-            ])
+            .args(["exec", "sci-family-dolibarr-db", "psql", "-U", "dolibarr", "-d", "dolibarr", "-c", &sql])
             .output()
             .await
             .map_err(|e| ServerFnError::new(format!("Erreur exec docker : {}", e)))?;
@@ -847,7 +833,7 @@ use crate::dolibarr::invoice_parser::{extract_text_from_pdf, parse_invoice_text}
 
 /// Analyse un PDF de facture fournisseur.
 /// Utilise pdf-extract d'abord. Si le texte extrait est trop court (< 200 car),
-/// bascule automatiquement sur l'OCR Tesseract pour lire les PDF scannes.
+/// bascule automatiquement sur l'OCR Tesseract.
 #[server]
 pub async fn dolibarr_parse_invoice_pdf(
     filename: String,
@@ -856,22 +842,13 @@ pub async fn dolibarr_parse_invoice_pdf(
     #[cfg(feature = "server")]
     {
         let _ = filename;
-        // 1. Extrait le texte natif
         let direct_text = extract_text_from_pdf(&bytes).unwrap_or_default();
 
-        // 2. Si trop court, tente l'OCR
         let final_text = if direct_text.trim().len() < 200 {
-            tracing::info!(
-                "PDF text extraction yielded only {} chars, falling back to OCR",
-                direct_text.trim().len()
-            );
             match ocr_pdf_internal(bytes.clone()).await {
                 Ok(ocr_text) if ocr_text.trim().len() > direct_text.trim().len() => ocr_text,
                 Ok(_) => direct_text,
-                Err(e) => {
-                    tracing::warn!("OCR failed: {}, keeping pdf-extract text", e);
-                    direct_text
-                }
+                Err(_) => direct_text,
             }
         } else {
             direct_text
@@ -904,7 +881,6 @@ pub async fn dolibarr_create_supplier_invoice(
 ) -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        // 1. Tiers fournisseur
         let safe_supplier = supplier_name.replace('\'', "''").trim().to_string();
         if safe_supplier.is_empty() {
             return Err(ServerFnError::new("Nom du fournisseur manquant"));
@@ -966,7 +942,6 @@ pub async fn dolibarr_create_supplier_invoice(
         note_parts.push("Source: OCR app SCI Family".to_string());
         let note_private = note_parts.join(" | ").replace('\'', "''");
 
-        // 4. Ref facture - GENERE UNE SEULE FOIS
         let final_ref: String = if invoice_number.trim().is_empty() {
             format!("FOURN-{}", chrono::Utc::now().timestamp())
         } else {
@@ -985,7 +960,6 @@ pub async fn dolibarr_create_supplier_invoice(
             format!("'{}'", due_date.replace('\'', "''"))
         };
 
-        // 5. INSERT facture fournisseur
         let sql_inv = format!(
             "INSERT INTO llx_facture_fourn (ref, ref_supplier, entity, fk_soc, datec, datef, date_lim_reglement, total_ht, total_tva, total_ttc, fk_statut, paye, note_private) \
              VALUES ('{}', '{}', 1, {}, NOW(), {}, {}, {}, {}, {}, 0, 0, '{}');",
@@ -1016,7 +990,6 @@ pub async fn dolibarr_create_supplier_invoice(
         let invoice_id: i64 = String::from_utf8_lossy(&get_out.stdout).trim().parse::<i64>()
             .map_err(|_| ServerFnError::new("ID facture fournisseur introuvable"))?;
 
-        // 7. Lignes facture
         if !vat_lines.is_empty() {
             for vl in vat_lines.iter() {
                 let base_e = parse_eur(&vl.base_ht);
@@ -1053,7 +1026,6 @@ pub async fn dolibarr_create_supplier_invoice(
                 .await;
         }
 
-        // 8. Attache le PDF - chemin : fournisseur/facture/{ref}/{filename}
         let safe_filename: String = file_name
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.' || *c == ' ')
@@ -1086,7 +1058,6 @@ pub async fn dolibarr_create_supplier_invoice(
             .output()
             .await;
 
-        // 9. Lien ecmfile -> facture_fourn
         let sql_get_id = format!(
             "SELECT rowid FROM llx_ecm_files WHERE filepath = '{}' ORDER BY rowid DESC LIMIT 1;",
             esc_filepath
@@ -1109,7 +1080,6 @@ pub async fn dolibarr_create_supplier_invoice(
                 .await;
         }
 
-        // 10. Retour "id|ref"
         Ok(format!("{}|{}", invoice_id, final_ref))
     }
     #[cfg(not(feature = "server"))]
@@ -1282,4 +1252,36 @@ fn sanitize_filename(s: &str) -> String {
     } else {
         trimmed
     }
+}
+
+// ============================================================
+//  IMPORT EMAIL (Gmail IMAP)
+// ============================================================
+
+/// Scanne le dossier Gmail "Facture" et renvoie la liste des emails non lus.
+#[server]
+pub async fn dolibarr_scan_email_factures() -> Result<Vec<EmailFacture>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        crate::email::scan_facture_folder().map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_scan_email_factures est executee cote serveur",
+    ))
+}
+
+/// Recupere le PDF joint du premier fichier PDF d'un email.
+#[server]
+pub async fn dolibarr_fetch_email_attachment(
+    uid: u32,
+) -> Result<(String, Vec<u8>), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        crate::email::fetch_attachment(uid).map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_fetch_email_attachment est executee cote serveur",
+    ))
 }
