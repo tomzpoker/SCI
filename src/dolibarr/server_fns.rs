@@ -1254,6 +1254,129 @@ fn sanitize_filename(s: &str) -> String {
     }
 }
 
+
+// ============================================================
+//  FLUX BANCAIRES DOLIBARR + MÉTADONNÉES LOCALES (TVA)
+// ============================================================
+
+/// Ligne bancaire enrichie avec ses métadonnées locales (taux TVA).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankLineEnriched {
+    pub dolibarr_id: String,
+    pub date: String,
+    pub label: String,
+    pub amount: f64,
+    pub vat_rate_bp: Option<i32>,
+}
+
+/// Charge toutes les lignes bancaires Dolibarr du compte principal actif,
+/// jointes avec les métadonnées locales (taux TVA) depuis bank_line_metadata.
+#[server]
+pub async fn dolibarr_get_all_bank_lines_enriched(
+) -> Result<Vec<BankLineEnriched>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        use crate::dolibarr::client::DolibarrClient;
+
+        let client = DolibarrClient::from_env().map_err(ServerFnError::new)?;
+
+        // 1. Récupère les comptes Dolibarr
+        let accounts = client
+            .list_bank_accounts()
+            .await
+            .map_err(ServerFnError::new)?;
+
+        // 2. Prend le premier compte non clôturé
+        let Some(account) = accounts.iter().find(|a| a.clos == 0) else {
+            return Ok(Vec::new());
+        };
+
+        // 3. Récupère les lignes du compte
+        let lines = client
+            .list_bank_lines(&account.id)
+            .await
+            .map_err(ServerFnError::new)?;
+
+        // 4. Charge les métadonnées locales (taux TVA par ligne Dolibarr)
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT dolibarr_line_id, vat_rate_bp FROM bank_line_metadata",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+
+        let mut rates: std::collections::HashMap<String, Option<i32>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let id: String = r.get("dolibarr_line_id");
+            let rate: Option<i32> = r.get("vat_rate_bp");
+            rates.insert(id, rate);
+        }
+
+        // 5. Combine
+        let enriched: Vec<BankLineEnriched> = lines
+            .into_iter()
+            .map(|l| {
+                let amount: f64 = l.amount.parse().unwrap_or(0.0);
+                let date = chrono::DateTime::<chrono::Utc>::from_timestamp(l.dateo, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                let rate = rates.get(&l.id).copied().flatten();
+                BankLineEnriched {
+                    dolibarr_id: l.id.clone(),
+                    date,
+                    label: l.label.clone(),
+                    amount,
+                    vat_rate_bp: rate,
+                }
+            })
+            .collect();
+
+        Ok(enriched)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_get_all_bank_lines_enriched est executee cote serveur",
+    ))
+}
+
+/// Attribue (ou efface) un taux de TVA à une ligne bancaire Dolibarr.
+/// vat_rate_bp : Some(2000) pour 20%, Some(0) pour exonérée, None pour effacer.
+#[server]
+pub async fn dolibarr_set_bank_line_vat_rate(
+    dolibarr_line_id: String,
+    vat_rate_bp: Option<i32>,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let rate = match vat_rate_bp {
+            Some(bp) if (0..=10000).contains(&bp) => Some(bp),
+            Some(_) => return Err(ServerFnError::new("Taux TVA invalide (0-10000 bp)")),
+            None => None,
+        };
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        sqlx::query(
+            "INSERT INTO bank_line_metadata (dolibarr_line_id, vat_rate_bp, updated_at) \
+             VALUES ($1, $2, now()) \
+             ON CONFLICT (dolibarr_line_id) DO UPDATE \
+                SET vat_rate_bp = EXCLUDED.vat_rate_bp, updated_at = now()",
+        )
+        .bind(&dolibarr_line_id)
+        .bind(rate)
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_set_bank_line_vat_rate est executee cote serveur",
+    ))
+}
+
+
 // ============================================================
 //  IMPORT EMAIL (Gmail IMAP)
 // ============================================================

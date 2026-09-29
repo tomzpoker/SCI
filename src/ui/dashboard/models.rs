@@ -81,6 +81,7 @@ pub struct BankTx {
     pub date: String,
     pub label: String,
     pub amount: f64,
+	pub vat_rate_bp: Option<i32>,
 }
 
 #[derive(Clone, Copy, PartialEq)]

@@ -896,7 +896,7 @@ pub async fn list_bank_transactions() -> Result<Vec<BankTransactionItem>, Server
         let pool = db().await.map_err(ServerFnError::new)?;
         let context = load_engine_context(pool, current_legal_entity_id()).await.map_err(ServerFnError::new)?;
         let id = context.legal_entity_id;
-        let rows=sqlx::query("SELECT id,booked_at,value_date,amount_cents,label,COALESCE(counterparty,'') AS counterparty,COALESCE(external_id,'') AS external_id,reconciliation_status FROM bank_transactions WHERE legal_entity_id=$1 ORDER BY booked_at DESC LIMIT 250").bind(id).fetch_all(pool).await.map_err(ServerFnError::new)?;
+        let rows=sqlx::query("SELECT id,booked_at,value_date,amount_cents,label,COALESCE(counterparty,'') AS counterparty,COALESCE(external_id,'') AS external_id,reconciliation_status,vat_rate_bp FROM bank_transactions WHERE legal_entity_id=$1 ORDER BY booked_at DESC LIMIT 250").bind(id).fetch_all(pool).await.map_err(ServerFnError::new)?;
         Ok(rows
             .into_iter()
             .map(|r| BankTransactionItem {
@@ -908,6 +908,7 @@ pub async fn list_bank_transactions() -> Result<Vec<BankTransactionItem>, Server
                 counterparty: r.get("counterparty"),
                 external_id: r.get("external_id"),
                 reconciliation_status: r.get("reconciliation_status"),
+                vat_rate_bp: r.get("vat_rate_bp"),
             })
             .collect())
     }
@@ -925,6 +926,7 @@ pub async fn create_bank_transaction(
     label: String,
     counterparty: String,
     external_id: String,
+    vat_rate_bp: Option<i32>,
 ) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
@@ -934,16 +936,24 @@ pub async fn create_bank_transaction(
         if label.trim().is_empty() {
             return Err(ServerFnError::new("Libellé bancaire requis"));
         }
-        sqlx::query("INSERT INTO bank_transactions(legal_entity_id,booked_at,value_date,amount_cents,label,counterparty,external_id) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,'')) ON CONFLICT(legal_entity_id,external_id) DO UPDATE SET booked_at=EXCLUDED.booked_at,value_date=EXCLUDED.value_date,amount_cents=EXCLUDED.amount_cents,label=EXCLUDED.label,counterparty=EXCLUDED.counterparty,updated_at=now()").bind(id).bind(booked_at).bind(value_date).bind(amount_cents).bind(label.trim()).bind(counterparty.trim()).bind(external_id.trim()).execute(pool).await.map_err(ServerFnError::new)?;
+        // Validation du taux : 0 à 10000 bp (0% à 100%)
+        let rate = match vat_rate_bp {
+            Some(bp) if (0..=10000).contains(&bp) => Some(bp),
+            Some(_) => return Err(ServerFnError::new("Taux TVA invalide (0-10000 bp)")),
+            None => None,
+        };
+        sqlx::query("INSERT INTO bank_transactions(legal_entity_id,booked_at,value_date,amount_cents,label,counterparty,external_id,vat_rate_bp) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8) ON CONFLICT(legal_entity_id,external_id) DO UPDATE SET booked_at=EXCLUDED.booked_at,value_date=EXCLUDED.value_date,amount_cents=EXCLUDED.amount_cents,label=EXCLUDED.label,counterparty=EXCLUDED.counterparty,vat_rate_bp=EXCLUDED.vat_rate_bp,updated_at=now()")
+            .bind(id).bind(booked_at).bind(value_date).bind(amount_cents).bind(label.trim()).bind(counterparty.trim()).bind(external_id.trim()).bind(rate)
+            .execute(pool).await.map_err(ServerFnError::new)?;
         let direction = if amount_cents >= 0 { "IN" } else { "OUT" };
-        record_financial_transaction(pool, id, booked_at, amount_cents.unsigned_abs().min(i64::MAX as u64) as i64, direction, "BANK_TRANSACTION", None, "RECORDED", if external_id.trim().is_empty(){None}else{Some(external_id.trim())}, counterparty.trim(), label.trim(), serde_json::json!({"value_date":value_date})).await.map_err(ServerFnError::new)?;
-        record_business_event(pool, id, "BankImported", booked_at, "bank_transaction", None, &format!("bank-import:{}:{}", id, external_id.trim()), serde_json::json!({"amount_cents":amount_cents,"external_id":external_id.trim()})).await.map_err(ServerFnError::new)?;
+        record_financial_transaction(pool, id, booked_at, amount_cents.unsigned_abs().min(i64::MAX as u64) as i64, direction, "BANK_TRANSACTION", None, "RECORDED", if external_id.trim().is_empty(){None}else{Some(external_id.trim())}, counterparty.trim(), label.trim(), serde_json::json!({"value_date":value_date,"vat_rate_bp":rate})).await.map_err(ServerFnError::new)?;
+        record_business_event(pool, id, "BankImported", booked_at, "bank_transaction", None, &format!("bank-import:{}:{}", id, external_id.trim()), serde_json::json!({"amount_cents":amount_cents,"external_id":external_id.trim(),"vat_rate_bp":rate})).await.map_err(ServerFnError::new)?;
         audit(
             pool,
             "IMPORT_BANK_TRANSACTION",
             None,
             None,
-            serde_json::json!({"amount_cents":amount_cents,"external_id":external_id}),
+            serde_json::json!({"amount_cents":amount_cents,"external_id":external_id,"vat_rate_bp":rate}),
         )
         .await
         .map_err(ServerFnError::new)?;
@@ -954,6 +964,50 @@ pub async fn create_bank_transaction(
         "create_bank_transaction est exécutée côté serveur",
     ))
 }
+
+/// Modifie le taux de TVA d'une transaction bancaire existante.
+/// Utile pour attribuer un taux après import CSV (10% rénovation, 0% assurance, etc.)
+#[server]
+pub async fn update_bank_tx_vat_rate(
+    tx_id: Uuid,
+    vat_rate_bp: Option<i32>,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let pool = db().await.map_err(ServerFnError::new)?;
+        let rate = match vat_rate_bp {
+            Some(bp) if (0..=10000).contains(&bp) => Some(bp),
+            Some(_) => return Err(ServerFnError::new("Taux TVA invalide (0-10000 bp)")),
+            None => None,
+        };
+        let r = sqlx::query("UPDATE bank_transactions SET vat_rate_bp=$3, updated_at=now() WHERE id=$1 AND legal_entity_id=$2")
+            .bind(tx_id)
+            .bind(current_legal_entity_id())
+            .bind(rate)
+            .execute(pool)
+            .await
+            .map_err(ServerFnError::new)?;
+        if r.rows_affected() == 0 {
+            return Err(ServerFnError::new("Transaction introuvable"));
+        }
+        audit(
+            pool,
+            "UPDATE_BANK_TX_VAT_RATE",
+            Some("bank_transaction"),
+            Some(tx_id),
+            serde_json::json!({"vat_rate_bp": rate}),
+        )
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "update_bank_tx_vat_rate est exécutée côté serveur",
+    ))
+}
+
+
 
 #[server]
 pub async fn delete_bank_transaction(id: Uuid) -> Result<(), ServerFnError> {
@@ -2097,5 +2151,126 @@ pub async fn create_automation_rule_full(
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new(
         "create_automation_rule est exécutée côté serveur",
+    ))
+}
+
+// ============================================================
+//  FLUX BANCAIRES DOLIBARR + MÉTADONNÉES LOCALES (TVA)
+// ============================================================
+
+/// Ligne bancaire enrichie avec ses métadonnées locales (taux TVA).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankLineEnriched {
+    pub dolibarr_id: String,
+    pub date: String,
+    pub label: String,
+    pub amount: f64,
+    pub vat_rate_bp: Option<i32>,
+}
+
+/// Charge toutes les lignes bancaires Dolibarr du compte principal actif,
+/// jointes avec les métadonnées locales (taux TVA) depuis bank_line_metadata.
+#[server]
+pub async fn dolibarr_get_all_bank_lines_enriched(
+) -> Result<Vec<BankLineEnriched>, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        use crate::dolibarr::client::DolibarrClient;
+
+        let client = DolibarrClient::from_env().map_err(ServerFnError::new)?;
+
+        // 1. Récupère les comptes Dolibarr
+        let accounts = client
+            .list_bank_accounts()
+            .await
+            .map_err(ServerFnError::new)?;
+
+        // 2. Prend le premier compte non clôturé
+        let Some(account) = accounts.iter().find(|a| a.clos == 0) else {
+            return Ok(Vec::new());
+        };
+
+        // 3. Récupère les lignes du compte
+        let lines = client
+            .list_bank_lines(&account.id)
+            .await
+            .map_err(ServerFnError::new)?;
+
+        // 4. Charge les métadonnées locales (taux TVA par ligne Dolibarr)
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT dolibarr_line_id, vat_rate_bp FROM bank_line_metadata",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+
+        let mut rates: std::collections::HashMap<String, Option<i32>> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let id: String = r.get("dolibarr_line_id");
+            let rate: Option<i32> = r.get("vat_rate_bp");
+            rates.insert(id, rate);
+        }
+
+        // 5. Combine
+        let enriched: Vec<BankLineEnriched> = lines
+            .into_iter()
+            .map(|l| {
+                let amount: f64 = l.amount.parse().unwrap_or(0.0);
+                let date = chrono::DateTime::<chrono::Utc>::from_timestamp(l.dateo, 0)
+                    .map(|dt| dt.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default();
+                let rate = rates.get(&l.id).copied().flatten();
+                BankLineEnriched {
+                    dolibarr_id: l.id.clone(),
+                    date,
+                    label: l.label.clone(),
+                    amount,
+                    vat_rate_bp: rate,
+                }
+            })
+            .collect();
+
+        Ok(enriched)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_get_all_bank_lines_enriched est executee cote serveur",
+    ))
+}
+
+/// Attribue (ou efface) un taux de TVA à une ligne bancaire Dolibarr.
+/// vat_rate_bp : Some(2000) pour 20%, Some(0) pour exonérée, None pour effacer.
+#[server]
+pub async fn dolibarr_set_bank_line_vat_rate(
+    dolibarr_line_id: String,
+    vat_rate_bp: Option<i32>,
+) -> Result<(), ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let rate = match vat_rate_bp {
+            Some(bp) if (0..=10000).contains(&bp) => Some(bp),
+            Some(_) => return Err(ServerFnError::new("Taux TVA invalide (0-10000 bp)")),
+            None => None,
+        };
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        sqlx::query(
+            "INSERT INTO bank_line_metadata (dolibarr_line_id, vat_rate_bp, updated_at) \
+             VALUES ($1, $2, now()) \
+             ON CONFLICT (dolibarr_line_id) DO UPDATE \
+                SET vat_rate_bp = EXCLUDED.vat_rate_bp, updated_at = now()",
+        )
+        .bind(&dolibarr_line_id)
+        .bind(rate)
+        .execute(pool)
+        .await
+        .map_err(ServerFnError::new)?;
+        Ok(())
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new(
+        "dolibarr_set_bank_line_vat_rate est executee cote serveur",
     ))
 }

@@ -9,12 +9,13 @@ use crate::server::{
     list_units,
 };
 
+use super::adapters::bank_tx_from_item;
 use super::forecast::ForecastWidget;
 use super::modal::TenantModal;
 use super::models::{BankTx, Payment, Task, TaskCategory, Tenant, TenantStatus, WidgetState};
 use super::tasks::TaskList;
 use super::tenants::TenantBars;
-use super::vat_dolibarr::VatWidgetDolibarr;
+use super::vat::VatWidget;
 
 #[component]
 pub fn DashboardWidgets() -> Element {
@@ -67,8 +68,7 @@ pub fn DashboardWidgets() -> Element {
 
     let tenants: Vec<Tenant> = (*tenants_resource.read()).clone().unwrap_or_default();
     let tasks: Vec<Task> = (*tasks_resource.read()).clone().unwrap_or_default();
-    // Préchargé pour usage futur (autres widgets)
-    let _bank_txs: Vec<BankTx> = (*bank_txs_resource.read()).clone().unwrap_or_default();
+    let bank_txs: Vec<BankTx> = (*bank_txs_resource.read()).clone().unwrap_or_default();
 
     let mut selected_tenant = use_signal(|| None::<Tenant>);
     let mut dragged_id = use_signal(|| None::<String>);
@@ -91,7 +91,6 @@ pub fn DashboardWidgets() -> Element {
                 "Debug Dolibarr (cliquer pour ouvrir)"
             }
 
-            // --- TEST DOLIBARR TIERS ---
             section {
                 style: "margin-top: 12px;",
                 h3 { "Test Dolibarr — Tiers" }
@@ -111,7 +110,6 @@ pub fn DashboardWidgets() -> Element {
                 }
             }
 
-            // --- TEST DOLIBARR FACTURES ---
             section {
                 style: "margin-top: 12px;",
                 h3 { "Test Dolibarr — Factures" }
@@ -213,7 +211,7 @@ pub fn DashboardWidgets() -> Element {
                                     }
                                 },
                                 "tasks" => rsx! { TaskList { tasks: tasks.clone() } },
-                                "vat" => rsx! { VatWidgetDolibarr {} },
+                                "vat" => rsx! { VatWidget {} },
                                 _ => rsx! { div { "Widget inconnu" } },
                             }
                         }
@@ -240,15 +238,6 @@ fn task_from_item(item: TaskItem) -> Task {
         label: item.title,
         due_in_days,
         category,
-    }
-}
-
-fn bank_tx_from_item(item: BankTransactionItem) -> BankTx {
-    BankTx {
-        id: item.id.as_u128() as usize,
-        date: item.booked_at.format("%Y-%m-%d").to_string(),
-        label: item.label,
-        amount: item.amount_cents as f64 / 100.0,
     }
 }
 

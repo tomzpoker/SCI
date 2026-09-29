@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::entity_scope::current_legal_entity_id;
-use crate::ui::{FormField, ModuleHeader};
+use crate::ui::{FormField, ModuleHeader, VatWidget};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VatDeclarationItem {
@@ -123,6 +123,19 @@ pub struct TaxObligationItem {
     pub due_date: Option<NaiveDate>,
     pub amount_cents: Option<i64>,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VatCalculationPreview {
+    pub period_start: NaiveDate,
+    pub period_end: NaiveDate,
+    pub ca_ht_cents: i64,
+    pub collected_vat_cents: i64,
+    pub deductible_vat_cents: i64,
+    pub corrections_vat_cents: i64,
+    pub payable_vat_cents: i64,
+    pub credit_vat_cents: i64,
+    pub basis_note: String,
 }
 
 fn month_end(start: NaiveDate) -> NaiveDate {
@@ -334,7 +347,6 @@ pub async fn generate_2072(tax_year:i32)->Result<Fiscal2072Item,ServerFnError>{
         let a1=json!({"1":rents,"2":0,"3":0,"4":0,"5":rents,"6":0,"7":0,"8":0,"9":0,"9bis":0,"10":0,"11":0,"12":charges,"13":0,"14":0,"15":0,"16":charges,"17":0,"18":net,"19":0,"20":0,"21":net,"22":0,"23":net});
         let data=json!({"tax_year":tax_year,"millesime":form_millesime,"form":"2072-S","R1":rents,"R2":0,"R3":charges,"R4":0,"R5":net,"A1":a1,"mapping_note":"Valeurs issues des flux présents; les lignes détaillées nécessitant une qualification spécifique restent à valider.","source":{"rent":"payments→invoices","charges":"financial_transactions"}});
         let anomalies_v=Value::Array(anomalies); let id:Uuid=sqlx::query_scalar("INSERT INTO fiscal_2072_runs(legal_entity_id,tax_year,form_version_id,status,data,anomalies) VALUES($1,$2,$3,'VALIDATION_REQUIRED',$4,$5) ON CONFLICT(legal_entity_id,tax_year,form_version_id) DO UPDATE SET data=EXCLUDED.data,anomalies=EXCLUDED.anomalies,status=CASE WHEN fiscal_2072_runs.status='FINAL' THEN 'FINAL' ELSE 'VALIDATION_REQUIRED' END,updated_at=now() RETURNING id").bind(e).bind(tax_year).bind(form_id).bind(data.clone()).bind(anomalies_v.clone()).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        // Quote-parts: uses explicit share history rows covering each part of the year.
         sqlx::query("DELETE FROM fiscal_2072_allocations WHERE legal_entity_id=$1 AND run_id=$2").bind(e).bind(id).execute(pool).await.map_err(ServerFnError::new)?;
         Ok(Fiscal2072Item{id,tax_year,form_code,status:"VALIDATION_REQUIRED".into(),data,anomalies:anomalies_v}) }
     #[cfg(not(feature="server"))] { let _=tax_year; Err(ServerFnError::new("generate_2072 est exécutée côté serveur")) }
@@ -413,6 +425,31 @@ pub async fn list_tax_obligations()->Result<Vec<TaxObligationItem>,ServerFnError
     #[cfg(not(feature="server"))] Err(ServerFnError::new("list_tax_obligations est exécutée côté serveur"))
 }
 
+/// Vue de calcul TVA sans créer ni modifier de déclaration.
+#[server]
+pub async fn calculate_vat_preview(period_start: NaiveDate, period_end: NaiveDate) -> Result<VatCalculationPreview, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        if period_end < period_start { return Err(ServerFnError::new("Période TVA invalide")); }
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        let entity = current_legal_entity_id();
+        let ca: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(taxable_net_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='COLLECTED' AND exigibility_basis IN ('COLLECTION','ADJUSTMENT')")
+            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
+        let collected: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='COLLECTED' AND exigibility_basis IN ('COLLECTION','ADJUSTMENT')")
+            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
+        let deductible: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='DEDUCTIBLE'")
+            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
+        let corrections: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='CORRECTION'")
+            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
+        let advances: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_advances WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND status<>'CANCELLED'")
+            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
+        let net = collected + corrections - deductible - advances;
+        Ok(VatCalculationPreview { period_start, period_end, ca_ht_cents: ca, collected_vat_cents: collected, deductible_vat_cents: deductible, corrections_vat_cents: corrections, payable_vat_cents: net.max(0), credit_vat_cents: (-net).max(0), basis_note: "Calcul fondé sur les mouvements TVA enregistrés et les acomptes documentés; aucune déclaration n'est modifiée.".into() })
+    }
+    #[cfg(not(feature = "server"))]
+    { let _=(period_start,period_end); Err(ServerFnError::new("calculate_vat_preview est exécutée côté serveur")) }
+}
+
 #[component]
 pub fn FiscalPage(mut refresh: Signal<u64>) -> Element {
     let mut bump = use_signal(|| 0u64);
@@ -446,6 +483,7 @@ pub fn FiscalPage(mut refresh: Signal<u64>) -> Element {
         async move { list_tax_obligations().await.unwrap_or_default() }
     });
 
+
     let mut p1 = use_signal(|| Utc::now().date_naive().with_day(1).unwrap().to_string());
     let mut p2 = use_signal(|| month_end(Utc::now().date_naive().with_day(1).unwrap()).to_string());
     let mut tax_year = use_signal(|| (Utc::now().year() - 1).to_string());
@@ -459,6 +497,12 @@ pub fn FiscalPage(mut refresh: Signal<u64>) -> Element {
             title: "Fiscalité",
             kicker: "TVA • 2072 • RÉSULTAT • QUOTE-PARTS • TAXES",
             detail: "Calculs sourcés, formulaires versionnés et simulations explicitement séparées des données déclaratives."
+        }
+
+        // === WIDGET TVA PRINCIPAL ===
+        section {
+            class: "panel",
+            VatWidget {}
         }
 
         section {
@@ -785,42 +829,4 @@ mod tests {
     fn vat_french_statuses_are_stable(){assert_eq!(vat_status_fr("DRAFT"),"Brouillon");assert_eq!(vat_status_fr("VALIDATION_REQUIRED"),"Validation requise");assert_eq!(vat_status_fr("FINAL"),"Finale");}
     #[test]
     fn month_end_handles_february(){let d=NaiveDate::from_ymd_opt(2026,2,1).unwrap();assert_eq!(month_end(d),NaiveDate::from_ymd_opt(2026,2,28).unwrap());}
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VatCalculationPreview {
-    pub period_start: NaiveDate,
-    pub period_end: NaiveDate,
-    pub ca_ht_cents: i64,
-    pub collected_vat_cents: i64,
-    pub deductible_vat_cents: i64,
-    pub corrections_vat_cents: i64,
-    pub payable_vat_cents: i64,
-    pub credit_vat_cents: i64,
-    pub basis_note: String,
-}
-
-/// Vue de calcul TVA sans créer ni modifier de déclaration.
-#[server]
-pub async fn calculate_vat_preview(period_start: NaiveDate, period_end: NaiveDate) -> Result<VatCalculationPreview, ServerFnError> {
-    #[cfg(feature = "server")]
-    {
-        if period_end < period_start { return Err(ServerFnError::new("Période TVA invalide")); }
-        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
-        let entity = current_legal_entity_id();
-        let ca: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(taxable_net_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='COLLECTED' AND exigibility_basis IN ('COLLECTION','ADJUSTMENT')")
-            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        let collected: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='COLLECTED' AND exigibility_basis IN ('COLLECTION','ADJUSTMENT')")
-            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        let deductible: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='DEDUCTIBLE'")
-            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        let corrections: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_entries WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND entry_kind='CORRECTION'")
-            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        let advances: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(vat_cents),0)::bigint FROM vat_advances WHERE legal_entity_id=$1 AND period_start=$2 AND period_end=$3 AND status<>'CANCELLED'")
-            .bind(entity).bind(period_start).bind(period_end).fetch_one(pool).await.map_err(ServerFnError::new)?;
-        let net = collected + corrections - deductible - advances;
-        Ok(VatCalculationPreview { period_start, period_end, ca_ht_cents: ca, collected_vat_cents: collected, deductible_vat_cents: deductible, corrections_vat_cents: corrections, payable_vat_cents: net.max(0), credit_vat_cents: (-net).max(0), basis_note: "Calcul fondé sur les mouvements TVA enregistrés et les acomptes documentés; aucune déclaration n'est modifiée.".into() })
-    }
-    #[cfg(not(feature = "server"))]
-    { let _=(period_start,period_end); Err(ServerFnError::new("calculate_vat_preview est exécutée côté serveur")) }
 }

@@ -307,6 +307,7 @@ pub struct BankTransactionItem {
     pub counterparty: String,
     pub external_id: String,
     pub reconciliation_status: String,
+	pub vat_rate_bp: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

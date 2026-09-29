@@ -8,6 +8,7 @@ pub fn bank_tx_from_item(item: BankTransactionItem) -> BankTx {
         date: item.booked_at.format("%Y-%m-%d").to_string(),
         label: item.label,
         amount: item.amount_cents as f64 / 100.0,
+        vat_rate_bp: item.vat_rate_bp,
     }
 }
 
