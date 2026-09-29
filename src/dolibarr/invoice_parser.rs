@@ -283,61 +283,127 @@ pub fn parse_invoice_text(text: &str) -> ParsedInvoice {
     }
 
     // ============ Date facture ET date échéance ============
-    // 1. "avant le XX mois YYYY" → date d'échéance
-    let avant_le_re = Regex::new(
-        r"(?i)avant\s+le\s+(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
+    // Regles :
+    //  - Rejette les dates < 2000 (refs legales type "loi du 10 juillet 1965")
+    //  - Priorise "Ville, le JJ/MM/AAAA" pour la date facture
+    //  - Priorise "AVANT LE ... JJ/MM/AAAA" pour l'echeance (tableaux inclus)
+    //  - Exclut les dates de periode ("du X au Y")
+
+    // --- 1. Due date : "AVANT LE ... JJ/MM/AAAA"
+    // On accepte jusqu'a 100 caracteres non-digits entre "avant le" et la date
+    // (necessaire quand l'echeance et le mot "AVANT LE" sont dans 2 cellules
+    //  differentes d'un tableau, comme sur les appels de fonds de syndic).
+    let avant_le_num = Regex::new(
+        r"(?i)avant\s+le[^\d]{0,100}(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})"
     ).unwrap();
-    if let Some(c) = avant_le_re.captures(&cleaned) {
-        if let Some(dt) = parse_french_date(&c[1], &c[2], &c[3]) {
-            result.due_date = dt;
+    if let Some(c) = avant_le_num.captures(&cleaned) {
+        let d = c[1].parse::<u32>().unwrap_or(0);
+        let m = c[2].parse::<u32>().unwrap_or(0);
+        let y_raw = &c[3];
+        let y = if y_raw.len() == 2 {
+            2000 + y_raw.parse::<i32>().unwrap_or(0)
+        } else {
+            y_raw.parse::<i32>().unwrap_or(0)
+        };
+        if y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+            result.due_date = format!("{:04}-{:02}-{:02}", y, m, d);
         }
     }
 
-    // 2. "FACTURE du XX mois YYYY" → date d'émission
-    let facture_du_re = Regex::new(
-        r"(?i)facture\s+du\s+(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
-    ).unwrap();
-    if let Some(c) = facture_du_re.captures(&cleaned) {
-        if let Some(dt) = parse_french_date(&c[1], &c[2], &c[3]) {
-            result.invoice_date = dt;
-        }
-    }
-
-    // 3. Sinon date en toutes lettres "16 mai 2022" / "le 16 mai 2022"
-    if result.invoice_date.is_empty() {
-        let month_re = Regex::new(
-            r"(?i)(?:le\s+)?(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
+    // --- 2. Due date : "avant le XX mois YYYY" (lettres)
+    if result.due_date.is_empty() {
+        let avant_le_re = Regex::new(
+            r"(?i)avant\s+le\s+(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
         ).unwrap();
-        if let Some(c) = month_re.captures(&cleaned) {
+        if let Some(c) = avant_le_re.captures(&cleaned) {
+            if let Some(dt) = parse_french_date(&c[1], &c[2], &c[3]) {
+                result.due_date = dt;
+            }
+        }
+    }
+
+    // --- 3. Due date : "echeance le JJ/MM/AAAA" / "date d'echeance : ..."
+    if result.due_date.is_empty() {
+        let ech_re = Regex::new(
+            r"(?i)(?:[eé]ch[eé]ance|date\s+limite)[^\d]{0,50}(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})"
+        ).unwrap();
+        if let Some(c) = ech_re.captures(&cleaned) {
+            let d = c[1].parse::<u32>().unwrap_or(0);
+            let m = c[2].parse::<u32>().unwrap_or(0);
+            let y_raw = &c[3];
+            let y = if y_raw.len() == 2 {
+                2000 + y_raw.parse::<i32>().unwrap_or(0)
+            } else {
+                y_raw.parse::<i32>().unwrap_or(0)
+            };
+            if y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+                result.due_date = format!("{:04}-{:02}-{:02}", y, m, d);
+            }
+        }
+    }
+
+    // --- 4. Invoice date : "Ville, le JJ/MM/AAAA" (ex: "Toulouse, le 19/12/2025")
+    let ville_le_num = Regex::new(
+        r"(?i)\b[A-ZÉÈ][a-zéèêàçû]+,\s+le\s+(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})"
+    ).unwrap();
+    if let Some(c) = ville_le_num.captures(&cleaned) {
+        let d = c[1].parse::<u32>().unwrap_or(0);
+        let m = c[2].parse::<u32>().unwrap_or(0);
+        let y_raw = &c[3];
+        let y = if y_raw.len() == 2 {
+            2000 + y_raw.parse::<i32>().unwrap_or(0)
+        } else {
+            y_raw.parse::<i32>().unwrap_or(0)
+        };
+        if y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+            result.invoice_date = format!("{:04}-{:02}-{:02}", y, m, d);
+        }
+    }
+
+    // --- 5. Invoice date : "FACTURE du XX mois YYYY" (lettres)
+    if result.invoice_date.is_empty() {
+        let facture_du_re = Regex::new(
+            r"(?i)facture\s+du\s+(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
+        ).unwrap();
+        if let Some(c) = facture_du_re.captures(&cleaned) {
             if let Some(dt) = parse_french_date(&c[1], &c[2], &c[3]) {
                 result.invoice_date = dt;
             }
         }
     }
 
-    // 4. Sinon date numerique classique (JJ/MM/AAAA ou JJ-MM-AAAA)
+    // --- 6. Invoice date : "le XX mois YYYY" en lettres (fallback, sanity year >= 2000)
     if result.invoice_date.is_empty() {
-        let date_re = Regex::new(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})").unwrap();
-        for c in date_re.captures_iter(&cleaned) {
-            let d = c[1].parse::<u32>().unwrap_or(1);
-            let m = c[2].parse::<u32>().unwrap_or(1);
-            let y = c[3].parse::<i32>().unwrap_or(2024);
-            if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
-                result.invoice_date = format!("{:04}-{:02}-{:02}", y, m, d);
+        let month_re = Regex::new(
+            r"(?i)(?:le\s+)?(\d{1,2})\s+(janvier|f[eé]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[eé]cembre)\s+(\d{4})"
+        ).unwrap();
+        for c in month_re.captures_iter(&cleaned) {
+            if let Some(dt) = parse_french_date(&c[1], &c[2], &c[3]) {
+                result.invoice_date = dt;
                 break;
             }
         }
     }
 
-    // 5. Fallback : date ISO AAAA-MM-JJ
+    // --- 7. Invoice date : numerique JJ/MM/AAAA (exclut les periodes "du X au Y")
     if result.invoice_date.is_empty() {
-        let date_iso = Regex::new(r"(\d{4})-(\d{2})-(\d{2})").unwrap();
-        if let Some(c) = date_iso.captures(&cleaned) {
-            let y = c[1].parse::<i32>().unwrap_or(2024);
-            let m = c[2].parse::<u32>().unwrap_or(1);
-            let d = c[3].parse::<u32>().unwrap_or(1);
-            if m >= 1 && m <= 12 && d >= 1 && d <= 31 {
+        let date_re = Regex::new(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})").unwrap();
+        for c in date_re.captures_iter(&cleaned) {
+            // Contexte avant : si on est dans une periode ("du", "au", "avant le"), skip
+            let start = c.get(0).unwrap().start();
+            let ctx_start = start.saturating_sub(20);
+            let ctx = cleaned[ctx_start..start].to_lowercase();
+            if ctx.contains("du ") || ctx.contains("au ") || ctx.contains("periode")
+                || ctx.contains("période") || ctx.contains("avant le ") || ctx.contains("avant le")
+            {
+                continue;
+            }
+            let d = c[1].parse::<u32>().unwrap_or(0);
+            let m = c[2].parse::<u32>().unwrap_or(0);
+            let y = c[3].parse::<i32>().unwrap_or(0);
+            if y >= 2000 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31 {
                 result.invoice_date = format!("{:04}-{:02}-{:02}", y, m, d);
+                break;
             }
         }
     }
@@ -376,10 +442,15 @@ pub fn parse_invoice_text(text: &str) -> ParsedInvoice {
     result
 }
 
-/// Parse une date en lettres ("16", "mai", "2022") -> "2022-05-16"
+/// Parse une date en lettres ("16", "mai", "2022") -> "2022-05-16".
+/// Rejette toute date < 2000 (references legales type "loi du 10 juillet 1965").
 fn parse_french_date(day: &str, month_str: &str, year: &str) -> Option<String> {
     let d = day.parse::<u32>().ok()?;
     let y = year.parse::<i32>().ok()?;
+    // Sanity check : rejette les dates aberrantes
+    if y < 2000 || y > 2100 {
+        return None;
+    }
     let month_key = month_str
         .to_lowercase()
         .replace('é', "e").replace('è', "e").replace('ê', "e")

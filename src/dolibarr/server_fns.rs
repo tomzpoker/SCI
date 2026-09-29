@@ -127,6 +127,94 @@ async fn find_available_name(
 }
 
 // ============================================================
+//  OCR PDF (Tesseract dans le conteneur Dolibarr)
+// ============================================================
+
+/// Convertit un PDF en PNG via pdftoppm puis lance Tesseract (fra) sur chaque page.
+/// Renvoie le texte OCR de toutes les pages concatene.
+#[cfg(feature = "server")]
+async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
+    // 1. Ecrit le PDF dans un fichier temporaire local
+    let tmp_path = std::env::temp_dir().join("doli_ocr_input.pdf");
+    tokio::fs::write(&tmp_path, &bytes)
+        .await
+        .map_err(|e| format!("Erreur write temp OCR : {}", e))?;
+
+    // 2. Copie le PDF dans le conteneur
+    let cp = tokio::process::Command::new("docker")
+        .args([
+            "cp",
+            &tmp_path.to_string_lossy(),
+            "sci-family-dolibarr:/tmp/ocr_input.pdf",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur docker cp OCR : {}", e))?;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+
+    if !cp.status.success() {
+        return Err(format!(
+            "Erreur docker cp OCR : {}",
+            String::from_utf8_lossy(&cp.stderr)
+        ));
+    }
+
+    // 3. pdftoppm : PDF -> PNG (300 dpi)
+    let pp = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            "sci-family-dolibarr",
+            "sh",
+            "-c",
+            "rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt && pdftoppm -png -r 300 /tmp/ocr_input.pdf /tmp/ocr_page",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur pdftoppm : {}", e))?;
+
+    if !pp.status.success() {
+        return Err(format!(
+            "Erreur pdftoppm : {}",
+            String::from_utf8_lossy(&pp.stderr)
+        ));
+    }
+
+    // 4. Tesseract sur toutes les pages, puis concat
+    let tess = tokio::process::Command::new("docker")
+        .args([
+            "exec",
+            "sci-family-dolibarr",
+            "sh",
+            "-c",
+            "for f in /tmp/ocr_page*.png; do tesseract \"$f\" \"${f%.png}\" -l fra 2>/dev/null; done; cat /tmp/ocr_page*.txt 2>/dev/null; rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt /tmp/ocr_input.pdf",
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur tesseract : {}", e))?;
+
+    if !tess.status.success() {
+        return Err(format!(
+            "Erreur tesseract : {}",
+            String::from_utf8_lossy(&tess.stderr)
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&tess.stdout).to_string();
+    Ok(text)
+}
+
+/// Server fn publique : OCR d'un PDF (fallback manuel si besoin).
+#[server]
+pub async fn dolibarr_ocr_pdf(bytes: Vec<u8>) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        ocr_pdf_internal(bytes).await.map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_ocr_pdf est executee cote serveur"))
+}
+
+// ============================================================
 //  FACTURES
 // ============================================================
 
@@ -749,7 +837,7 @@ pub async fn dolibarr_list_patrimoine_documents(
 }
 
 // ============================================================
-//  SCAN FACTURE FOURNISSEUR (OCR + parsing)
+//  SCAN FACTURE FOURNISSEUR (pdf-extract + OCR fallback)
 // ============================================================
 
 use crate::dolibarr::invoice_parser::ParsedInvoice;
@@ -757,7 +845,9 @@ use crate::dolibarr::invoice_parser::ParsedInvoice;
 #[cfg(feature = "server")]
 use crate::dolibarr::invoice_parser::{extract_text_from_pdf, parse_invoice_text};
 
-/// Analyse un PDF de facture fournisseur et retourne les champs extraits.
+/// Analyse un PDF de facture fournisseur.
+/// Utilise pdf-extract d'abord. Si le texte extrait est trop court (< 200 car),
+/// bascule automatiquement sur l'OCR Tesseract pour lire les PDF scannes.
 #[server]
 pub async fn dolibarr_parse_invoice_pdf(
     filename: String,
@@ -766,9 +856,28 @@ pub async fn dolibarr_parse_invoice_pdf(
     #[cfg(feature = "server")]
     {
         let _ = filename;
-        let text = extract_text_from_pdf(&bytes)
-            .map_err(ServerFnError::new)?;
-        let parsed = parse_invoice_text(&text);
+        // 1. Extrait le texte natif
+        let direct_text = extract_text_from_pdf(&bytes).unwrap_or_default();
+
+        // 2. Si trop court, tente l'OCR
+        let final_text = if direct_text.trim().len() < 200 {
+            tracing::info!(
+                "PDF text extraction yielded only {} chars, falling back to OCR",
+                direct_text.trim().len()
+            );
+            match ocr_pdf_internal(bytes.clone()).await {
+                Ok(ocr_text) if ocr_text.trim().len() > direct_text.trim().len() => ocr_text,
+                Ok(_) => direct_text,
+                Err(e) => {
+                    tracing::warn!("OCR failed: {}, keeping pdf-extract text", e);
+                    direct_text
+                }
+            }
+        } else {
+            direct_text
+        };
+
+        let parsed = parse_invoice_text(&final_text);
         Ok(parsed)
     }
     #[cfg(not(feature = "server"))]

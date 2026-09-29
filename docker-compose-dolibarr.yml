@@ -16,7 +16,10 @@ services:
       retries: 20
 
   dolibarr:
-    image: tuxgasy/dolibarr:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.dolibarr
+    image: sci-family-dolibarr:local
     container_name: sci-family-dolibarr
     restart: unless-stopped
     depends_on:

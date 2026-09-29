@@ -68,3 +68,8 @@ backup_*.sql
 
 # Backups locaux de sprints
 .backup-*/
+# Fichiers de debug locaux
+conf_final.txt
+conf_fix.txt
+db_fix.txt
+extra_conf.php
