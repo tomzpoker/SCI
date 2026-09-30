@@ -151,7 +151,7 @@ pub async fn list_lease_details() -> Result<Vec<LeaseDetailItem>, ServerFnError>
                 l.security_deposit_expected_cents, l.entry_fee_expected_cents,
                 l.entry_fee_status, l.active,
                 l.revision_period_months, l.index_publication_day,
-                l.index_publication_month_offset
+                l.index_publication_month_offset, l.revision_application_mode
              FROM leases l
              JOIN units u ON u.id = l.unit_id
              JOIN properties p ON p.id = u.property_id
@@ -181,6 +181,7 @@ pub async fn list_lease_details() -> Result<Vec<LeaseDetailItem>, ServerFnError>
             revision_period_months: r.get("revision_period_months"),
             index_publication_day: r.get("index_publication_day"),
             index_publication_month_offset: r.get("index_publication_month_offset"),
+            revision_application_mode: r.get("revision_application_mode"),
         }).collect())
     }
     #[cfg(not(feature = "server"))]
@@ -1165,13 +1166,11 @@ fn RevisionModal(
 
     rsx! {
         div {
-            class: "dash-modal-overlay",
-            style: "position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 9999;",
+            style: "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 2147483647;",
             onclick: move |_| on_close.call(false),
             div {
-                class: "dash-modal",
                 onclick: move |e| e.stop_propagation(),
-                style: "max-width: 720px; max-height: 85vh; overflow-y: auto;",
+                style: "background: #1e293b; border-radius: 12px; padding: 24px; max-width: 720px; width: 90%; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.6);",
                 div { style: "height: 4px; background: #38bdf8; margin: -24px -24px 20px -24px; border-radius: 12px 12px 0 0;" }
                 div { style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;",
                     div {
@@ -1420,7 +1419,7 @@ pub fn LeasesPage(refresh: Signal<u64>) -> Element {
     let reference_period_start: Option<NaiveDate> = current_anniversary
         .map(|a| a - Duration::days(365 * (rev_months as i64) / 12));
 
-    let applicable_period: Option<String> = current_anniversary
+    let _applicable_period: Option<String> = current_anniversary
         .and_then(|a| expected_period_for_date(a, pub_day, pub_offset));
 
     let next_expected_period: Option<String> = next_anniv
@@ -1430,7 +1429,29 @@ pub fn LeasesPage(refresh: Signal<u64>) -> Element {
         .map(|p| all_icc.iter().any(|i| i.period_label == p))
         .unwrap_or(false);
 
+    let modal_id = selected();
+    let modal_show = show_revision_modal();
+    let modal_cc = clause_code();
+    let modal_ip = index_period();
+    let modal_date = NaiveDate::parse_from_str(&revision_date(), "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::Utc::now().date_naive());
+
     rsx! {
+        if modal_show {
+            if let Some(mid) = modal_id {
+                RevisionModal {
+                    lease_id: mid,
+                    clause_code: modal_cc.clone(),
+                    index_period: modal_ip.clone(),
+                    effective_date: modal_date,
+                    on_close: move |refresh_needed: bool| {
+                        show_revision_modal.set(false);
+                        if refresh_needed { bump += 1; }
+                    },
+                }
+            }
+        }
+
         ModuleHeader {
             title: "Baux & locations",
             kicker: "CONTRATS • INDEXATION • CHARGES • DÉPÔTS • GARANTIES",
@@ -1665,24 +1686,6 @@ pub fn LeasesPage(refresh: Signal<u64>) -> Element {
                 button { class: "primary",
                     onclick: move |_| show_revision_modal.set(true),
                     "Calculer la révision"
-                }
-                if show_revision_modal() {
-                    {
-                        let d = NaiveDate::parse_from_str(&revision_date(), "%Y-%m-%d")
-                            .unwrap_or_else(|_| chrono::Utc::now().date_naive());
-                        rsx! {
-                            RevisionModal {
-                                lease_id: id,
-                                clause_code: clause_code(),
-                                index_period: index_period(),
-                                effective_date: d,
-                                on_close: move |refresh_needed: bool| {
-                                    show_revision_modal.set(false);
-                                    if refresh_needed { bump += 1; }
-                                },
-                            }
-                        }
-                    }
                 }
                 div {
                     for r in revisions.read().as_deref().unwrap_or(&[]).iter() {

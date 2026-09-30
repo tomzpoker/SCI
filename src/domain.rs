@@ -379,6 +379,7 @@ pub struct LeaseDetailItem {
     pub revision_period_months: i32,
     pub index_publication_day: i32,
     pub index_publication_month_offset: i32,
+    pub revision_application_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -473,7 +474,6 @@ pub struct LeaseRentRevisionItem {
     pub result_status: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DocumentFolderItem {
     pub code: String,
@@ -500,12 +500,8 @@ pub struct AutomationRuleItem {
     pub priority: i32,
     pub auto_execute: bool,
     pub enabled: bool,
-    /// Si renseigné (1-31), la tâche tombe ce jour-là de chaque mois.
-    /// Si NULL, on retombe sur le système `horizon_days`.
     pub due_day_of_month: Option<i16>,
-    /// Nombre de jours avant l'échéance où la tâche devient urgente (affichée en orange).
     pub urgency_lead_days: i16,
-    /// Nombre de jours avant l'échéance où la préparation démarre.
     pub prep_lead_days: i16,
 }
 
