@@ -107,7 +107,7 @@ async fn business_tool(tool: AssistantTool) -> Result<ToolResult, ServerFnError>
         }
         AssistantTool::CalculateRentRevision{lease_id} => {
             let today = Utc::now().date_naive();
-            let v=crate::leases::calculate_lease_rent_revision(lease_id,"INDEXATION".into(),today.format("%Y-%m").to_string(),today).await?;
+            let v=crate::leases::preview_lease_rent_revision(lease_id,"INDEXATION".into(),today.format("%Y-%m").to_string(),today).await?;
             Ok(ToolResult{success:true,data:serde_json::to_value(v).unwrap_or(Value::Null),error:None,uncertainty:String::new()})
         }
         AssistantTool::CalculateVat{period_start,period_end} => {

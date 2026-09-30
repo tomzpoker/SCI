@@ -76,3 +76,4 @@ extra_conf.php
 fixtures_impayes.sql
 fixtures_local.sql
 fixtures_dolibarr.sql
+storage/

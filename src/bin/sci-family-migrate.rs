@@ -3,6 +3,9 @@ use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Charge le .env (silencieux si absent)
+    let _ = dotenvy::dotenv();
+
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| "DATABASE_URL est absent de l'environnement du migrateur")?;
 

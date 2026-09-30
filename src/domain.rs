@@ -376,6 +376,9 @@ pub struct LeaseDetailItem {
     pub entry_fee_expected_cents: i64,
     pub entry_fee_status: String,
     pub active: bool,
+    pub revision_period_months: i32,
+    pub index_publication_day: i32,
+    pub index_publication_month_offset: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
