@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-/// Facture impayée enrichie (issue de Dolibarr).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UnpaidInvoiceItem {
     pub dolibarr_invoice_id: String,
@@ -14,11 +13,10 @@ pub struct UnpaidInvoiceItem {
     pub paid: f64,
     pub outstanding: f64,
     pub days_overdue: i32,
-    pub relance_level_sent: i32,     // 0 = aucune, 1/2/3 = niveau déjà envoyé
+    pub relance_level_sent: i32,
     pub last_relance_at: Option<i64>,
 }
 
-/// Agrégat par tiers pour le bloc dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UnpaidTenantSummary {
     pub client_id: String,
@@ -32,7 +30,6 @@ pub struct UnpaidTenantSummary {
 }
 
 impl UnpaidTenantSummary {
-    /// Statut visuel : vert (à jour), orange (léger retard), rouge (grave).
     pub fn severity(&self) -> Severity {
         match self.max_days_overdue {
             d if d <= 0 => Severity::Ok,
@@ -62,7 +59,6 @@ impl Severity {
     }
 }
 
-/// Historique d'une relance envoyée.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelanceHistoryItem {
     pub id: String,
@@ -76,7 +72,6 @@ pub struct RelanceHistoryItem {
     pub error_message: String,
 }
 
-/// Un local (lot) avec son statut d'occupation et de paiement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LocalBarItem {
     pub unit_id: String,
@@ -96,13 +91,9 @@ pub struct LocalBarItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LocalStatus {
-    /// Pas de bail actif
     Vacant,
-    /// Locataire en place, aucune facture impayée
     UpToDate,
-    /// Impayé < 60 jours
     Late,
-    /// Impayé >= 60 jours
     Critical,
 }
 
@@ -123,4 +114,19 @@ impl LocalStatus {
             LocalStatus::Critical => "Critique",
         }
     }
+}
+
+/// Prévisualisation d'une relance (sans envoi).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelancePreview {
+    pub level_code: i32,
+    pub level_label: String,
+    pub subject: String,
+    pub body: String,
+    pub recipient_email: String,
+    pub days_overdue: i32,
+    pub outstanding: f64,
+    pub penalties: f64,
+    pub forfait: f64,
+    pub total_due: f64,
 }

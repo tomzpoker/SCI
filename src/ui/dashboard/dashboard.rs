@@ -14,7 +14,7 @@ use super::vat::VatWidget;
 pub fn DashboardWidgets() -> Element {
     let mut refresh = use_signal(|| 0u64);
 
-    // === Locaux + impayés depuis Dolibarr (vue complète : occupés, vides, à jour) ===
+    // === Locaux + impayés depuis Dolibarr ===
     let locals_resource = use_resource(move || {
         let _ = refresh();
         async move {
@@ -53,15 +53,14 @@ pub fn DashboardWidgets() -> Element {
     let mut dragged_id = use_signal(|| None::<String>);
     let mut widgets = use_signal(|| {
         vec![
-            WidgetState { id: "forecast", title: "PREVISIONNEL", col_span: 8, pinned: false, order: 0 },
-            WidgetState { id: "tenants", title: "LOCAUX & SOLDES", col_span: 4, pinned: false, order: 1 },
-            WidgetState { id: "tasks", title: "TACHES ADMINISTRATIVES", col_span: 6, pinned: false, order: 2 },
-            WidgetState { id: "vat", title: "TVA COLLECTEE", col_span: 6, pinned: false, order: 3 },
+            WidgetState { id: "tenants",  title: "LOCAUX & SOLDES",       col_span: 4, pinned: false, order: 0 },
+            WidgetState { id: "forecast", title: "PREVISIONNEL",           col_span: 8, pinned: false, order: 1 },
+            WidgetState { id: "tasks",    title: "TACHES ADMINISTRATIVES", col_span: 6, pinned: false, order: 2 },
+            WidgetState { id: "vat",      title: "TVA COLLECTEE",          col_span: 6, pinned: false, order: 3 },
         ]
     });
 
     rsx! {
-        // --- DEBUG DOLIBARR (repliable) ---
         details {
             class: "panel",
             style: "margin-bottom: 16px;",
@@ -83,9 +82,7 @@ pub fn DashboardWidgets() -> Element {
                     Some(Err(e)) => rsx! {
                         div { style: "color: red;", {format!("Erreur : {e}")} }
                     },
-                    None => rsx! {
-                        div { "Chargement..." }
-                    },
+                    None => rsx! { div { "Chargement..." } },
                 }
             }
 
@@ -110,14 +107,11 @@ pub fn DashboardWidgets() -> Element {
                     Some(Err(e)) => rsx! {
                         div { style: "color: red;", {format!("Erreur : {e}")} }
                     },
-                    None => rsx! {
-                        div { "Chargement..." }
-                    },
+                    None => rsx! { div { "Chargement..." } },
                 }
             }
         }
 
-        // --- DASHBOARD ---
         section {
             class: "dash-grid",
             for widget in widgets() {
@@ -198,10 +192,12 @@ pub fn DashboardWidgets() -> Element {
                 }
             }
 
-            // Modale détail local
             LocalModal {
                 local: selected_local,
-                on_close: move |_| selected_local.set(None),
+                on_close: move |_| {
+                    selected_local.set(None);
+                    refresh += 1;
+                },
             }
         }
     }

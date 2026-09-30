@@ -4,10 +4,9 @@ use super::data::*;
 use super::templates::{self, RelanceLevel, RelanceContext};
 
 // ============================================================
-//  IMPAYÉS DOLIBARR (source de vérité)
+//  IMPAYÉS DOLIBARR
 // ============================================================
 
-/// Liste les factures impayées de Dolibarr, agrégées par tiers.
 #[server]
 pub async fn list_unpaid_tenants() -> Result<Vec<UnpaidTenantSummary>, ServerFnError> {
     #[cfg(feature = "server")]
@@ -127,16 +126,11 @@ pub async fn list_unpaid_tenants() -> Result<Vec<UnpaidTenantSummary>, ServerFnE
         Ok(result)
     }
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new(
-        "list_unpaid_tenants est executee cote serveur",
-    ))
+    Err(ServerFnError::new("list_unpaid_tenants est executee cote serveur"))
 }
 
 // ============================================================
 //  VUE GLOBALE DES LOCAUX
-//  - Locaux (units) : table LOCALE (roadmap : Ultimateimmo est payant)
-//  - Locataires + factures : DOLIBARR (source de vérité)
-//  - Les impayés Dolibarr non rattachés à un local sont affichés "Hors patrimoine"
 // ============================================================
 
 #[server]
@@ -149,15 +143,11 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
         let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
         let entity = current_legal_entity_id();
 
-        // 1. Charge tous les units locaux + leur bail actif + le locataire local associé
         let rows = sqlx::query(
             "SELECT
-                u.id AS unit_id,
-                u.code AS unit_code,
-                u.label AS unit_label,
+                u.id AS unit_id, u.code AS unit_code, u.label AS unit_label,
                 p.name AS property_name,
-                t.id AS tenant_id,
-                t.legal_name AS tenant_name,
+                t.id AS tenant_id, t.legal_name AS tenant_name,
                 COALESCE(t.contact_email, '') AS tenant_email,
                 l.id AS lease_id
              FROM units u
@@ -172,10 +162,8 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
         .await
         .map_err(ServerFnError::new)?;
 
-        // 2. Récupère les impayés Dolibarr
         let unpaid = list_unpaid_tenants().await.unwrap_or_default();
 
-        // 3. Indexe par email + par nom (lowercase)
         let mut by_email: HashMap<String, &UnpaidTenantSummary> = HashMap::new();
         let mut by_name: HashMap<String, &UnpaidTenantSummary> = HashMap::new();
         for u in unpaid.iter() {
@@ -187,7 +175,6 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
             }
         }
 
-        // 4. Construit la liste depuis les units LOCAUX
         let mut locals: Vec<LocalBarItem> = Vec::new();
         let mut matched_client_ids: HashSet<String> = HashSet::new();
 
@@ -201,26 +188,13 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
 
             let (status, dolibarr_client_id, total_outstanding, max_days, inv_count, level_sent, invoices) =
                 match tenant_name.as_ref() {
-                    None => (
-                        LocalStatus::Vacant,
-                        None,
-                        0.0,
-                        0,
-                        0,
-                        0,
-                        Vec::new(),
-                    ),
+                    None => (LocalStatus::Vacant, None, 0.0, 0, 0, 0, Vec::new()),
                     Some(_) => {
-                        // Cherche dans Dolibarr par email puis par nom
                         let matched = tenant_email
                             .as_ref()
                             .filter(|e| !e.is_empty())
                             .and_then(|e| by_email.get(&e.to_lowercase()).copied())
-                            .or_else(|| {
-                                tenant_name.as_ref().and_then(|n| {
-                                    by_name.get(&n.to_lowercase()).copied()
-                                })
-                            });
+                            .or_else(|| tenant_name.as_ref().and_then(|n| by_name.get(&n.to_lowercase()).copied()));
 
                         match matched {
                             Some(summary) => {
@@ -242,26 +216,15 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
                                     summary.invoices.clone(),
                                 )
                             }
-                            None => (
-                                LocalStatus::UpToDate,
-                                None,
-                                0.0,
-                                0,
-                                0,
-                                0,
-                                Vec::new(),
-                            ),
+                            None => (LocalStatus::UpToDate, None, 0.0, 0, 0, 0, Vec::new()),
                         }
                     }
                 };
 
             locals.push(LocalBarItem {
                 unit_id: unit_id.to_string(),
-                unit_code,
-                unit_label,
-                property_name,
-                tenant_name,
-                tenant_email,
+                unit_code, unit_label, property_name,
+                tenant_name, tenant_email,
                 dolibarr_client_id,
                 total_outstanding,
                 max_days_overdue: max_days,
@@ -272,7 +235,7 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
             });
         }
 
-        // 5. Ajoute les tiers Dolibarr IMPAYÉS non rattachés à un unit local
+        // Impayés orphelins
         for summary in unpaid.iter() {
             if matched_client_ids.contains(&summary.client_id) {
                 continue;
@@ -301,8 +264,7 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
             });
         }
 
-        // 6. Tri : Critical, Late, UpToDate, Vacant (vides toujours à droite).
-        //    Au sein d'une catégorie : montant décroissant.
+        // Tri : Critical, Late, UpToDate, Vacant
         locals.sort_by(|a, b| {
             let order = |s: LocalStatus| match s {
                 LocalStatus::Critical => 0,
@@ -310,13 +272,9 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
                 LocalStatus::UpToDate => 2,
                 LocalStatus::Vacant => 3,
             };
-            order(a.status)
-                .cmp(&order(b.status))
-                .then_with(|| {
-                    b.total_outstanding
-                        .partial_cmp(&a.total_outstanding)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+            order(a.status).cmp(&order(b.status)).then_with(|| {
+                b.total_outstanding.partial_cmp(&a.total_outstanding).unwrap_or(std::cmp::Ordering::Equal)
+            })
         });
 
         Ok(locals)
@@ -326,139 +284,186 @@ pub async fn list_all_locals() -> Result<Vec<LocalBarItem>, ServerFnError> {
 }
 
 // ============================================================
-//  ENVOI DE RELANCE
-//  - Priorité : API Dolibarr (module de relance natif, gratuit)
-//  - Fallback : SMTP Gmail via lettre
+//  RELANCES — helper interne (preview + send)
+// ============================================================
+
+#[cfg(feature = "server")]
+async fn build_relance_preview(
+    invoice_id: &str,
+    level_code: i32,
+) -> Result<(RelancePreview, RelanceLevel, String, f64, f64, f64, String), String> {
+    use crate::dolibarr::client::DolibarrClient;
+    use crate::dolibarr::models::DolibarrThirdParty;
+
+    let level = RelanceLevel::from_code(level_code)
+        .ok_or_else(|| "Niveau de relance invalide".to_string())?;
+
+    let client = DolibarrClient::from_env()?;
+    let invoice = client.get_invoice(invoice_id).await?;
+    let third: DolibarrThirdParty = client
+        .get_third_party(&invoice.socid)
+        .await
+        .unwrap_or(DolibarrThirdParty {
+            id: invoice.socid.clone(),
+            name: invoice.ref_client.clone(),
+            name_alias: String::new(),
+            email: String::new(),
+            phone: String::new(),
+            address: String::new(),
+            zip: String::new(),
+            town: String::new(),
+            client: String::new(),
+            fournisseur: String::new(),
+            code_client: String::new(),
+            code_fournisseur: String::new(),
+            siren: String::new(),
+            siret: String::new(),
+        });
+
+    let recipient_email = third.email.clone();
+
+    let pool = crate::infrastructure::db().await.map_err(|e| e.to_string())?;
+    let entity = current_legal_entity_id();
+    use sqlx::Row;
+    let entity_row = sqlx::query(
+        "SELECT legal_name, registered_office, COALESCE(siren,'') AS siren,
+                COALESCE(MAX(a.iban) FILTER (WHERE a.active AND a.is_primary),'') AS iban,
+                COALESCE(MAX(a.bic) FILTER (WHERE a.active AND a.is_primary),'') AS bic
+         FROM legal_entities e
+         LEFT JOIN legal_entity_bank_accounts a ON a.legal_entity_id = e.id
+         WHERE e.id = $1
+         GROUP BY e.id",
+    )
+    .bind(entity)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let sci_name: String = entity_row.get("legal_name");
+    let sci_address: String = entity_row.get("registered_office");
+    let sci_siren: String = entity_row.get("siren");
+    let sci_iban: String = entity_row.get("iban");
+    let sci_bic: String = entity_row.get("bic");
+
+    let total_ttc: f64 = invoice.total_ttc.parse().unwrap_or(0.0);
+    let paid: f64 = invoice.paye.parse().unwrap_or(0.0);
+    let outstanding = (total_ttc - paid).max(0.0);
+    let now_ts = chrono::Utc::now().timestamp();
+    let days_overdue = if invoice.date_lim_reglement > 0 && now_ts > invoice.date_lim_reglement {
+        ((now_ts - invoice.date_lim_reglement) / 86400) as i32
+    } else { 0 };
+
+    let penalty_rate = 0.0802;
+    let ht_ratio = if total_ttc > 0.0 {
+        invoice.total_ht.parse::<f64>().unwrap_or(0.0) / total_ttc
+    } else { 1.0 };
+    let outstanding_ht = outstanding * ht_ratio;
+    let penalties = if days_overdue > 0 {
+        (outstanding_ht * penalty_rate * days_overdue as f64 / 365.0).max(0.0)
+    } else { 0.0 };
+    let forfait = if days_overdue > 0 { 40.0 } else { 0.0 };
+    let total_due = outstanding + penalties + forfait;
+
+    let due_date_str = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        invoice.date_lim_reglement, 0,
+    ).map(|d| d.format("%d/%m/%Y").to_string()).unwrap_or_default();
+
+    let ctx = RelanceContext {
+        sci_name: sci_name.clone(),
+        sci_address: sci_address.clone(),
+        sci_siren: sci_siren.clone(),
+        sci_iban: sci_iban.clone(),
+        sci_bic: sci_bic.clone(),
+        client_name: third.name.clone(),
+        invoice_ref: invoice.r#ref.clone(),
+        invoice_due_date: due_date_str,
+        invoice_amount: format!("{:.2}", total_ttc),
+        outstanding_amount: format!("{:.2}", outstanding),
+        days_overdue,
+        penalties: format!("{:.2}", penalties),
+        forfait: format!("{:.2}", forfait),
+        total_due: format!("{:.2}", total_due),
+        tribunal: "Toulouse".to_string(),
+    };
+
+    let subject = templates::subject_for(level, &ctx);
+    let body = templates::body_for(level, &ctx);
+
+    let preview = RelancePreview {
+        level_code,
+        level_label: level.label().to_string(),
+        subject,
+        body,
+        recipient_email: recipient_email.clone(),
+        days_overdue,
+        outstanding,
+        penalties,
+        forfait,
+        total_due,
+    };
+
+    Ok((preview, level, recipient_email, outstanding, penalties, forfait, third.name))
+}
+
+// ============================================================
+//  PREVIEW RELANCE
+// ============================================================
+
+#[server]
+pub async fn preview_invoice_relance(
+    invoice_id: String,
+    level_code: i32,
+) -> Result<RelancePreview, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        let (preview, _, _, _, _, _, _) = build_relance_preview(&invoice_id, level_code)
+            .await
+            .map_err(ServerFnError::new)?;
+        Ok(preview)
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = (invoice_id, level_code);
+        Err(ServerFnError::new("preview_invoice_relance est executee cote serveur"))
+    }
+}
+
+// ============================================================
+//  ENVOI RELANCE
 // ============================================================
 
 #[server]
 pub async fn send_invoice_relance(
     invoice_id: String,
     level_code: i32,
-    recipient_email: String,
+    recipient_email_override: Option<String>,
 ) -> Result<String, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use crate::dolibarr::client::DolibarrClient;
-        use crate::dolibarr::models::DolibarrThirdParty;
 
-        let level = RelanceLevel::from_code(level_code)
-            .ok_or_else(|| ServerFnError::new("Niveau de relance invalide"))?;
-        if recipient_email.trim().is_empty() {
-            return Err(ServerFnError::new(
-                "Aucun email client renseigné dans Dolibarr",
-            ));
+        let (preview, level, default_email, outstanding, penalties, forfait, client_name) =
+            build_relance_preview(&invoice_id, level_code)
+                .await
+                .map_err(ServerFnError::new)?;
+
+        let recipient = recipient_email_override
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or(default_email);
+
+        if recipient.trim().is_empty() {
+            return Err(ServerFnError::new("Aucun email client renseigné dans Dolibarr"));
         }
 
         let client = DolibarrClient::from_env().map_err(ServerFnError::new)?;
 
-        let invoice = client
-            .get_invoice(&invoice_id)
-            .await
-            .map_err(ServerFnError::new)?;
-        let third: DolibarrThirdParty = client
-            .get_third_party(&invoice.socid)
-            .await
-            .unwrap_or(DolibarrThirdParty {
-                id: invoice.socid.clone(),
-                name: invoice.ref_client.clone(),
-                name_alias: String::new(),
-                email: recipient_email.clone(),
-                phone: String::new(),
-                address: String::new(),
-                zip: String::new(),
-                town: String::new(),
-                client: String::new(),
-                fournisseur: String::new(),
-                code_client: String::new(),
-                code_fournisseur: String::new(),
-                siren: String::new(),
-                siret: String::new(),
-            });
-
-        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
-        let entity = current_legal_entity_id();
-        use sqlx::Row;
-        let entity_row = sqlx::query(
-            "SELECT legal_name, registered_office, COALESCE(siren,'') AS siren,
-                    COALESCE(MAX(a.iban) FILTER (WHERE a.active AND a.is_primary),'') AS iban,
-                    COALESCE(MAX(a.bic) FILTER (WHERE a.active AND a.is_primary),'') AS bic
-             FROM legal_entities e
-             LEFT JOIN legal_entity_bank_accounts a ON a.legal_entity_id = e.id
-             WHERE e.id = $1
-             GROUP BY e.id",
-        )
-        .bind(entity)
-        .fetch_one(pool)
-        .await
-        .map_err(ServerFnError::new)?;
-
-        let sci_name: String = entity_row.get("legal_name");
-        let sci_address: String = entity_row.get("registered_office");
-        let sci_siren: String = entity_row.get("siren");
-        let sci_iban: String = entity_row.get("iban");
-        let sci_bic: String = entity_row.get("bic");
-
-        let total_ttc: f64 = invoice.total_ttc.parse().unwrap_or(0.0);
-        let paid: f64 = invoice.paye.parse().unwrap_or(0.0);
-        let outstanding = (total_ttc - paid).max(0.0);
-        let now_ts = chrono::Utc::now().timestamp();
-        let days_overdue = if invoice.date_lim_reglement > 0 && now_ts > invoice.date_lim_reglement {
-            ((now_ts - invoice.date_lim_reglement) / 86400) as i32
-        } else {
-            0
-        };
-
-        let penalty_rate = 0.0802;
-        let ht_ratio = if total_ttc > 0.0 {
-            invoice.total_ht.parse::<f64>().unwrap_or(0.0) / total_ttc
-        } else {
-            1.0
-        };
-        let outstanding_ht = outstanding * ht_ratio;
-        let penalties = if days_overdue > 0 {
-            (outstanding_ht * penalty_rate * days_overdue as f64 / 365.0).max(0.0)
-        } else {
-            0.0
-        };
-        let forfait = if days_overdue > 0 { 40.0 } else { 0.0 };
-        let total_due = outstanding + penalties + forfait;
-
-        let due_date_str = chrono::DateTime::<chrono::Utc>::from_timestamp(
-            invoice.date_lim_reglement,
-            0,
-        )
-        .map(|d| d.format("%d/%m/%Y").to_string())
-        .unwrap_or_default();
-
-        let ctx = RelanceContext {
-            sci_name: sci_name.clone(),
-            sci_address: sci_address.clone(),
-            sci_siren: sci_siren.clone(),
-            sci_iban: sci_iban.clone(),
-            sci_bic: sci_bic.clone(),
-            client_name: third.name.clone(),
-            invoice_ref: invoice.r#ref.clone(),
-            invoice_due_date: due_date_str,
-            invoice_amount: format!("{:.2}", total_ttc),
-            outstanding_amount: format!("{:.2}", outstanding),
-            days_overdue,
-            penalties: format!("{:.2}", penalties),
-            forfait: format!("{:.2}", forfait),
-            total_due: format!("{:.2}", total_due),
-            tribunal: "Toulouse".to_string(),
-        };
-
-        let subject = templates::subject_for(level, &ctx);
-        let body = templates::body_for(level, &ctx);
-
         let (sent_via, status, error_msg) = match client
-            .send_invoice_email(&invoice_id, &recipient_email, &subject, &body)
+            .send_invoice_email(&invoice_id, &recipient, &preview.subject, &preview.body)
             .await
         {
             Ok(_) => ("dolibarr".to_string(), "sent".to_string(), String::new()),
             Err(doli_err) => {
-                match send_via_gmail_smtp(&recipient_email, &subject, &body).await {
+                match send_via_gmail_smtp(&recipient, &preview.subject, &preview.body).await {
                     Ok(_) => ("smtp".to_string(), "sent".to_string(), String::new()),
                     Err(smtp_err) => (
                         "smtp".to_string(),
@@ -469,6 +474,16 @@ pub async fn send_invoice_relance(
             }
         };
 
+        let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
+        let entity = current_legal_entity_id();
+
+        // Récupère la ref de la facture pour le log
+        let invoice_ref = client
+            .get_invoice(&invoice_id)
+            .await
+            .map(|i| i.r#ref)
+            .unwrap_or_default();
+
         sqlx::query(
             "INSERT INTO email_relances \
              (legal_entity_id, dolibarr_invoice_id, invoice_ref, client_name, client_email, \
@@ -477,17 +492,17 @@ pub async fn send_invoice_relance(
         )
         .bind(entity)
         .bind(&invoice_id)
-        .bind(&invoice.r#ref)
-        .bind(&third.name)
-        .bind(&recipient_email)
+        .bind(&invoice_ref)
+        .bind(&client_name)
+        .bind(&recipient)
         .bind(level.code())
-        .bind(&subject)
-        .bind(&body)
+        .bind(&preview.subject)
+        .bind(&preview.body)
         .bind(&sent_via)
         .bind(&status)
         .bind(&error_msg)
         .bind(serde_json::json!({
-            "days_overdue": days_overdue,
+            "days_overdue": preview.days_overdue,
             "outstanding": outstanding,
             "penalties": penalties,
             "forfait": forfait,
@@ -500,44 +515,40 @@ pub async fn send_invoice_relance(
             return Err(ServerFnError::new(error_msg));
         }
 
-        Ok(format!(
-            "{} envoyée à {} via {}",
-            level.label(),
-            recipient_email,
-            sent_via
-        ))
+        Ok(format!("{} envoyée à {} via {}", level.label(), recipient, sent_via))
     }
     #[cfg(not(feature = "server"))]
     {
-        let _ = (invoice_id, level_code, recipient_email);
-        Err(ServerFnError::new(
-            "send_invoice_relance est executee cote serveur",
-        ))
+        let _ = (invoice_id, level_code, recipient_email_override);
+        Err(ServerFnError::new("send_invoice_relance est executee cote serveur"))
     }
 }
 
 // ============================================================
-//  HISTORIQUE DES RELANCES (overlay local)
+//  HISTORIQUE PAR FACTURES
 // ============================================================
 
 #[server]
-pub async fn list_invoice_relances(
-    invoice_id: String,
+pub async fn list_relances_for_invoices(
+    invoice_ids: Vec<String>,
 ) -> Result<Vec<RelanceHistoryItem>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use sqlx::Row;
+        if invoice_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
         let entity = current_legal_entity_id();
         let rows = sqlx::query(
             "SELECT id, invoice_ref, client_name, level, subject, sent_at, \
                     sent_via, status, COALESCE(error_message,'') AS error_message \
              FROM email_relances \
-             WHERE legal_entity_id = $1 AND dolibarr_invoice_id = $2 \
-             ORDER BY sent_at DESC LIMIT 50",
+             WHERE legal_entity_id = $1 AND dolibarr_invoice_id = ANY($2) \
+             ORDER BY sent_at DESC LIMIT 100",
         )
         .bind(entity)
-        .bind(&invoice_id)
+        .bind(&invoice_ids)
         .fetch_all(pool)
         .await
         .map_err(ServerFnError::new)?;
@@ -562,15 +573,13 @@ pub async fn list_invoice_relances(
     }
     #[cfg(not(feature = "server"))]
     {
-        let _ = invoice_id;
-        Err(ServerFnError::new(
-            "list_invoice_relances est executee cote serveur",
-        ))
+        let _ = invoice_ids;
+        Err(ServerFnError::new("list_relances_for_invoices est executee cote serveur"))
     }
 }
 
 // ============================================================
-//  FALLBACK SMTP (Gmail)
+//  FALLBACK SMTP
 // ============================================================
 
 #[cfg(feature = "server")]
@@ -578,33 +587,22 @@ async fn send_via_gmail_smtp(to: &str, subject: &str, body: &str) -> Result<(), 
     use lettre::transport::smtp::authentication::Credentials;
     use lettre::{Message, SmtpTransport, Transport};
 
-    let user = std::env::var("GMAIL_USER")
-        .map_err(|_| "GMAIL_USER manquant".to_string())?;
-    let pass = std::env::var("GMAIL_APP_PASSWORD")
-        .map_err(|_| "GMAIL_APP_PASSWORD manquant".to_string())?;
+    let user = std::env::var("GMAIL_USER").map_err(|_| "GMAIL_USER manquant".to_string())?;
+    let pass = std::env::var("GMAIL_APP_PASSWORD").map_err(|_| "GMAIL_APP_PASSWORD manquant".to_string())?;
 
     let email = Message::builder()
-        .from(
-            user.parse()
-                .map_err(|e| format!("From invalide : {}", e))?,
-        )
-        .to(to
-            .parse()
-            .map_err(|e| format!("To invalide : {}", e))?)
+        .from(user.parse().map_err(|e| format!("From invalide : {}", e))?)
+        .to(to.parse().map_err(|e| format!("To invalide : {}", e))?)
         .subject(subject)
         .body(body.to_string())
         .map_err(|e| format!("Erreur construction email : {}", e))?;
 
     let creds = Credentials::new(user, pass);
-
     let mailer = SmtpTransport::relay("smtp.gmail.com")
         .map_err(|e| format!("Erreur relay SMTP : {}", e))?
         .credentials(creds)
         .build();
 
-    mailer
-        .send(&email)
-        .map_err(|e| format!("Erreur envoi SMTP : {}", e))?;
-
+    mailer.send(&email).map_err(|e| format!("Erreur envoi SMTP : {}", e))?;
     Ok(())
 }
