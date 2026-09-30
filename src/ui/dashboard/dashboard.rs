@@ -1,39 +1,30 @@
 use dioxus::prelude::*;
-use uuid::Uuid;
 
-use crate::domain::{
-    BankTransactionItem, InvoiceItem, LeaseItem, PaymentItem, TaskItem, TenantItem, UnitItem,
-};
-use crate::server::{
-    list_bank_transactions, list_invoices, list_leases, list_payments, list_tasks, list_tenants,
-    list_units,
-};
+use crate::relances::LocalBarItem;
+use crate::server::list_tasks;
 
-use super::adapters::bank_tx_from_item;
 use super::forecast::ForecastWidget;
-use super::modal::TenantModal;
-use super::models::{BankTx, Payment, Task, TaskCategory, Tenant, TenantStatus, WidgetState};
+use super::modal::LocalModal;
+use super::models::{Task, TaskCategory, WidgetState};
 use super::tasks::TaskList;
-use super::tenants::TenantBars;
+use super::tenants::LocalBars;
 use super::vat::VatWidget;
 
 #[component]
 pub fn DashboardWidgets() -> Element {
     let mut refresh = use_signal(|| 0u64);
 
-    // === Chargement des données depuis la BDD locale ===
-    let tenants_resource = use_resource(move || {
+    // === Locaux + impayés depuis Dolibarr (vue complète : occupés, vides, à jour) ===
+    let locals_resource = use_resource(move || {
         let _ = refresh();
         async move {
-            let tenants = list_tenants().await.unwrap_or_default();
-            let leases = list_leases().await.unwrap_or_default();
-            let units = list_units().await.unwrap_or_default();
-            let invoices = list_invoices().await.unwrap_or_default();
-            let payments = list_payments().await.unwrap_or_default();
-            build_tenant_blocks(&tenants, &leases, &units, &invoices, &payments)
+            crate::relances::list_all_locals()
+                .await
+                .unwrap_or_default()
         }
     });
 
+    // === Tâches locales ===
     let tasks_resource = use_resource(move || {
         let _ = refresh();
         async move {
@@ -46,18 +37,6 @@ pub fn DashboardWidgets() -> Element {
         }
     });
 
-    let bank_txs_resource = use_resource(move || {
-        let _ = refresh();
-        async move {
-            list_bank_transactions()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(bank_tx_from_item)
-                .collect::<Vec<_>>()
-        }
-    });
-
     // === TEST DOLIBARR (debug, repliable) ===
     let dolibarr_test = use_resource(|| async move {
         crate::dolibarr::server_fns::dolibarr_list_third_parties(10).await
@@ -66,11 +45,11 @@ pub fn DashboardWidgets() -> Element {
         crate::dolibarr::server_fns::dolibarr_list_invoices(10).await
     });
 
-    let tenants: Vec<Tenant> = (*tenants_resource.read()).clone().unwrap_or_default();
+    let locals: Vec<LocalBarItem> =
+        (*locals_resource.read()).clone().unwrap_or_default();
     let tasks: Vec<Task> = (*tasks_resource.read()).clone().unwrap_or_default();
-    let bank_txs: Vec<BankTx> = (*bank_txs_resource.read()).clone().unwrap_or_default();
 
-    let mut selected_tenant = use_signal(|| None::<Tenant>);
+    let mut selected_local = use_signal(|| None::<LocalBarItem>);
     let mut dragged_id = use_signal(|| None::<String>);
     let mut widgets = use_signal(|| {
         vec![
@@ -205,9 +184,9 @@ pub fn DashboardWidgets() -> Element {
                             match widget.id {
                                 "forecast" => rsx! { ForecastWidget {} },
                                 "tenants" => rsx! {
-                                    TenantBars {
-                                        tenants: tenants.clone(),
-                                        on_select: move |t| selected_tenant.set(Some(t)),
+                                    LocalBars {
+                                        locals: locals.clone(),
+                                        on_select: move |l: LocalBarItem| selected_local.set(Some(l)),
                                     }
                                 },
                                 "tasks" => rsx! { TaskList { tasks: tasks.clone() } },
@@ -219,12 +198,16 @@ pub fn DashboardWidgets() -> Element {
                 }
             }
 
-            TenantModal { tenant: selected_tenant, on_close: move |_| selected_tenant.set(None) }
+            // Modale détail local
+            LocalModal {
+                local: selected_local,
+                on_close: move |_| selected_local.set(None),
+            }
         }
     }
 }
 
-fn task_from_item(item: TaskItem) -> Task {
+fn task_from_item(item: crate::domain::TaskItem) -> Task {
     let now = chrono::Utc::now();
     let due_in_days = (item.due_at - now).num_days() as i32;
     let category = match item.code.as_str() {
@@ -239,94 +222,4 @@ fn task_from_item(item: TaskItem) -> Task {
         due_in_days,
         category,
     }
-}
-
-fn build_tenant_blocks(
-    tenants: &[TenantItem],
-    leases: &[LeaseItem],
-    units: &[UnitItem],
-    invoices: &[InvoiceItem],
-    payments: &[PaymentItem],
-) -> Vec<Tenant> {
-    let mut blocks: Vec<Tenant> = Vec::new();
-
-    for unit in units {
-        let active_lease = leases.iter().find(|l| l.unit_id == unit.id && l.active);
-
-        match active_lease {
-            Some(lease) => {
-                let Some(tenant) = tenants.iter().find(|t| t.id == lease.tenant_id) else {
-                    continue;
-                };
-
-                let tenant_invoices: Vec<&InvoiceItem> = invoices
-                    .iter()
-                    .filter(|i| i.lease_id == Some(lease.id))
-                    .collect();
-
-                let balance: f64 = tenant_invoices
-                    .iter()
-                    .map(|i| (i.paid_cents - i.gross_cents) as f64 / 100.0)
-                    .sum();
-
-                let tenant_invoice_ids: Vec<Uuid> =
-                    tenant_invoices.iter().map(|i| i.id).collect();
-
-                let tenant_payments: Vec<Payment> = payments
-                    .iter()
-                    .filter(|p| {
-                        p.invoice_id
-                            .map(|x| tenant_invoice_ids.contains(&x))
-                            .unwrap_or(false)
-                    })
-                    .take(6)
-                    .map(|p| {
-                        let expected = p
-                            .invoice_id
-                            .and_then(|iid| invoices.iter().find(|i| i.id == iid))
-                            .map(|i| i.gross_cents as f64 / 100.0)
-                            .unwrap_or(0.0);
-                        Payment {
-                            date: p.received_at.format("%Y-%m-%d").to_string(),
-                            expected,
-                            received: p.amount_cents as f64 / 100.0,
-                        }
-                    })
-                    .collect();
-
-                let status = if !tenant.active {
-                    TenantStatus::Vacant
-                } else if balance >= -0.01 {
-                    TenantStatus::Paid
-                } else if balance > -300.0 {
-                    TenantStatus::Late
-                } else {
-                    TenantStatus::Unpaid
-                };
-
-                blocks.push(Tenant {
-                    id: unit.id.as_u128() as usize,
-                    name: tenant.legal_name.clone(),
-                    property: format!("{} • {}", unit.property_name, unit.label),
-                    rent: unit.base_rent_cents as f64 / 100.0,
-                    balance,
-                    status,
-                    payments: tenant_payments,
-                });
-            }
-            None => {
-                blocks.push(Tenant {
-                    id: unit.id.as_u128() as usize,
-                    name: "Vacant".into(),
-                    property: format!("{} • {}", unit.property_name, unit.label),
-                    rent: unit.base_rent_cents as f64 / 100.0,
-                    balance: 0.0,
-                    status: TenantStatus::Vacant,
-                    payments: vec![],
-                });
-            }
-        }
-    }
-
-    blocks
 }

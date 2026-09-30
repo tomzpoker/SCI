@@ -92,3 +92,5 @@ pub struct WidgetState {
     pub pinned: bool,
     pub order: usize,
 }
+
+pub use crate::relances::UnpaidTenantSummary;

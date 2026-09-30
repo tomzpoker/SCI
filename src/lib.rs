@@ -33,3 +33,4 @@ pub mod business_profiles;
 pub mod prevision;
 pub mod dolibarr;
 pub mod email;
+pub mod relances;

@@ -207,6 +207,38 @@ impl DolibarrClient {
         Ok(())
     }
 
+    /// Envoie un email depuis Dolibarr pour une facture.
+    /// L'expéditeur, le logo et les paramètres SMTP sont ceux configurés dans Dolibarr.
+    /// Le PDF de la facture est automatiquement joint par Dolibarr.
+    pub async fn send_invoice_email(
+        &self,
+        invoice_id: &str,
+        to: &str,
+        subject: &str,
+        message: &str,
+    ) -> Result<(), String> {
+        #[derive(serde::Serialize)]
+        struct SendBody<'a> {
+            sendto: &'a str,
+            subject: &'a str,
+            message: &'a str,
+            filename: &'static str,
+            fromname: &'static str,
+            frommail: &'static str,
+        }
+        let body = SendBody {
+            sendto: to,
+            subject,
+            message,
+            filename: "auto",
+            fromname: "auto",
+            frommail: "auto",
+        };
+        let path = format!("invoices/{}/send", invoice_id);
+        let _: serde_json::Value = self.post_json(&path, &body).await?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------------
     //  PAIEMENTS
     // ------------------------------------------------------------------------

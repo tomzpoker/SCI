@@ -73,3 +73,6 @@ conf_final.txt
 conf_fix.txt
 db_fix.txt
 extra_conf.php
+fixtures_impayes.sql
+fixtures_local.sql
+fixtures_dolibarr.sql
