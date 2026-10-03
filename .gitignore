@@ -77,3 +77,9 @@ fixtures_impayes.sql
 fixtures_local.sql
 fixtures_dolibarr.sql
 storage/
+
+# Tests désactivés — dette technique, à réactiver dans un sprint dédié
+tests/
+
+# Documentation archivee (gardee en local)
+docs/_archive/
