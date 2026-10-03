@@ -69,3 +69,6 @@ panic = "abort"
 name = "sci-family-migrate"
 path = "src/bin/sci-family-migrate.rs"
 required-features = ["server"]
+
+[dev-dependencies]
+rust_decimal_macros = "1"

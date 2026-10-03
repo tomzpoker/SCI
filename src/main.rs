@@ -14,6 +14,8 @@ fn main() {
 
     #[cfg(feature = "server")]
     {
+        use dioxus::server::axum::extract::DefaultBodyLimit;
+
         dioxus::serve(|| async move {
             let pool = infrastructure::db_unchecked()
                 .await
@@ -47,7 +49,12 @@ fn main() {
                 }
             });
 
-            Ok(dioxus::server::router(App))
+            // Routeur Dioxus + limite de corps portée à 32 Mo
+            // (nécessaire pour uploader les scans PDF de taxe foncière)
+            let router = dioxus::server::router(App)
+                .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
+
+            Ok(router)
         });
     }
 

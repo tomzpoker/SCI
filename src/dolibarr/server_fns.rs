@@ -132,10 +132,25 @@ async fn find_available_name(
 //  OCR PDF (Tesseract dans le conteneur Dolibarr)
 // ============================================================
 
-/// Convertit un PDF en PNG via pdftoppm puis lance Tesseract (fra) sur chaque page.
+/// Convertit/OCR selon le type réel du fichier (magic bytes) :
+/// - PDF → pdftoppm + tesseract
+/// - JPG / PNG / WebP / TIFF / GIF → tesseract direct
+/// - HEIC / HEIF → heif-convert + tesseract
+/// - format inconnu → erreur claire
 #[cfg(feature = "server")]
 async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
-    let tmp_path = std::env::temp_dir().join("doli_ocr_input.pdf");
+    let (ext, mode) = detect_image_kind(&bytes);
+
+    tracing::info!(
+        "OCR: fichier reçu, taille={} octets, format détecté={}, mode={:?}",
+        bytes.len(),
+        ext,
+        mode
+    );
+
+    let remote_input = format!("/tmp/ocr_input.{}", ext);
+    let tmp_path = std::env::temp_dir().join(format!("doli_ocr_input.{}", ext));
+
     tokio::fs::write(&tmp_path, &bytes)
         .await
         .map_err(|e| format!("Erreur write temp OCR : {}", e))?;
@@ -144,11 +159,12 @@ async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
         .args([
             "cp",
             &tmp_path.to_string_lossy(),
-            "sci-family-dolibarr:/tmp/ocr_input.pdf",
+            &format!("sci-family-dolibarr:{}", remote_input),
         ])
         .output()
         .await
         .map_err(|e| format!("Erreur docker cp OCR : {}", e))?;
+
     let _ = tokio::fs::remove_file(&tmp_path).await;
 
     if !cp.status.success() {
@@ -158,46 +174,158 @@ async fn ocr_pdf_internal(bytes: Vec<u8>) -> Result<String, String> {
         ));
     }
 
-    let pp = tokio::process::Command::new("docker")
-        .args([
-            "exec",
-            "sci-family-dolibarr",
-            "sh",
-            "-c",
-            "rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt && pdftoppm -png -r 300 /tmp/ocr_input.pdf /tmp/ocr_page",
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("Erreur pdftoppm : {}", e))?;
-
-    if !pp.status.success() {
-        return Err(format!(
-            "Erreur pdftoppm : {}",
-            String::from_utf8_lossy(&pp.stderr)
-        ));
-    }
+    // Commande OCR avec --psm 1 (orientation & script detection).
+    // Fallback rotation 180° via ImageMagick si le texte n'a pas assez de chiffres.
+    let shell_cmd = match mode {
+        OcrMode::Pdf => format!(
+            "rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt && \
+             pdftoppm -png -r 300 {input} /tmp/ocr_page && \
+             for f in /tmp/ocr_page*.png; do \
+                 tesseract \"$f\" \"${{f%.png}}\" -l fra --psm 1 2>/dev/null; \
+             done && \
+             cat /tmp/ocr_page*.txt 2>/dev/null | tr -d '\\f'",
+            input = remote_input
+        ),
+        OcrMode::Image => format!(
+            "rm -f /tmp/ocr_image_out.txt /tmp/ocr_image_out_rot.txt && \
+             tesseract {input} /tmp/ocr_image_out -l fra --psm 1 2>/dev/null; \
+             T1=$(cat /tmp/ocr_image_out.txt 2>/dev/null | tr -d '\\f'); \
+             N1=$(echo \"$T1\" | grep -oE '[0-9]{{4,}}' | wc -l); \
+             if [ \"$N1\" -lt 3 ]; then \
+                 convert {input} -rotate 180 /tmp/ocr_image_rot.jpg 2>/dev/null && \
+                 tesseract /tmp/ocr_image_rot.jpg /tmp/ocr_image_out_rot -l fra --psm 1 2>/dev/null; \
+                 T2=$(cat /tmp/ocr_image_out_rot.txt 2>/dev/null | tr -d '\\f'); \
+                 N2=$(echo \"$T2\" | grep -oE '[0-9]{{4,}}' | wc -l); \
+                 if [ \"$N2\" -gt \"$N1\" ]; then echo \"$T2\"; else echo \"$T1\"; fi; \
+             else echo \"$T1\"; fi",
+            input = remote_input
+        ),
+        OcrMode::Heic => format!(
+            "rm -f /tmp/ocr_heic.png /tmp/ocr_heic.txt /tmp/ocr_heic_rot.png /tmp/ocr_heic_rot.txt && \
+             heif-convert {input} /tmp/ocr_heic.png >/dev/null 2>&1 && \
+             tesseract /tmp/ocr_heic.png /tmp/ocr_heic -l fra --psm 1 2>/dev/null; \
+             T1=$(cat /tmp/ocr_heic.txt 2>/dev/null | tr -d '\\f'); \
+             N1=$(echo \"$T1\" | grep -oE '[0-9]{{4,}}' | wc -l); \
+             if [ \"$N1\" -lt 3 ]; then \
+                 convert /tmp/ocr_heic.png -rotate 180 /tmp/ocr_heic_rot.png 2>/dev/null && \
+                 tesseract /tmp/ocr_heic_rot.png /tmp/ocr_heic_rot -l fra --psm 1 2>/dev/null; \
+                 T2=$(cat /tmp/ocr_heic_rot.txt 2>/dev/null | tr -d '\\f'); \
+                 N2=$(echo \"$T2\" | grep -oE '[0-9]{{4,}}' | wc -l); \
+                 if [ \"$N2\" -gt \"$N1\" ]; then echo \"$T2\"; else echo \"$T1\"; fi; \
+             else echo \"$T1\"; fi",
+            input = remote_input
+        ),
+        OcrMode::Unknown => {
+            return Err(format!(
+                "Format de fichier non reconnu (détecté comme '{}'). Formats acceptés : PDF, JPG, PNG, WebP, HEIC.",
+                ext
+            ));
+        }
+    };
 
     let tess = tokio::process::Command::new("docker")
-        .args([
-            "exec",
-            "sci-family-dolibarr",
-            "sh",
-            "-c",
-            "for f in /tmp/ocr_page*.png; do tesseract \"$f\" \"${f%.png}\" -l fra 2>/dev/null; done; cat /tmp/ocr_page*.txt 2>/dev/null; rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt /tmp/ocr_input.pdf",
-        ])
+        .args(["exec", "sci-family-dolibarr", "sh", "-c", &shell_cmd])
         .output()
         .await
-        .map_err(|e| format!("Erreur tesseract : {}", e))?;
+        .map_err(|e| format!("Erreur exécution OCR : {}", e))?;
 
     if !tess.status.success() {
         return Err(format!(
-            "Erreur tesseract : {}",
+            "Erreur OCR ({} , mode {:?}) : {}",
+            ext,
+            mode,
             String::from_utf8_lossy(&tess.stderr)
         ));
     }
 
     let text = String::from_utf8_lossy(&tess.stdout).to_string();
+
+    // Nettoyage en root (le fichier /tmp/ocr_input.* a été créé par docker cp = root)
+    let cleanup_cmd = match mode {
+        OcrMode::Pdf => format!(
+            "rm -f /tmp/ocr_page*.png /tmp/ocr_page*.txt {}",
+            remote_input
+        ),
+        OcrMode::Image => format!(
+            "rm -f /tmp/ocr_image_out.txt /tmp/ocr_image_out_rot.txt /tmp/ocr_image_rot.jpg {}",
+            remote_input
+        ),
+        OcrMode::Heic => format!(
+            "rm -f /tmp/ocr_heic.png /tmp/ocr_heic.txt /tmp/ocr_heic_rot.png /tmp/ocr_heic_rot.txt {}",
+            remote_input
+        ),
+        OcrMode::Unknown => String::new(),
+    };
+    if !cleanup_cmd.is_empty() {
+        let _ = tokio::process::Command::new("docker")
+            .args(["exec", "-u", "root", "sci-family-dolibarr", "sh", "-c", &cleanup_cmd])
+            .output()
+            .await;
+    }
+
     Ok(text)
+}
+
+
+
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, Copy)]
+enum OcrMode {
+    Pdf,
+    Image,
+    Heic,
+    Unknown,
+}
+
+#[cfg(feature = "server")]
+fn detect_image_kind(bytes: &[u8]) -> (&'static str, OcrMode) {
+    if bytes.is_empty() {
+        return ("empty", OcrMode::Unknown);
+    }
+
+    // PDF : %PDF
+    if bytes.starts_with(b"%PDF") {
+        return ("pdf", OcrMode::Pdf);
+    }
+
+    // JPEG : FF D8 FF
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return ("jpg", OcrMode::Image);
+    }
+
+    // PNG : 89 50 4E 47 0D 0A 1A 0A
+    if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return ("png", OcrMode::Image);
+    }
+
+    // WebP : RIFF....WEBP
+    if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return ("webp", OcrMode::Image);
+    }
+
+    // TIFF : II*\0 (little endian) ou MM\0* (big endian)
+    if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00])
+        || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
+        return ("tiff", OcrMode::Image);
+    }
+
+    // HEIC / HEIF : octets 4-7 = "ftyp", marque interne (bytes 8-11)
+    if bytes.len() > 12 && &bytes[4..8] == b"ftyp" {
+        let brand = &bytes[8..12];
+        if brand == b"heic" || brand == b"heix" || brand == b"hevc"
+            || brand == b"hevx" || brand == b"mif1" || brand == b"msf1"
+        {
+            return ("heic", OcrMode::Heic);
+        }
+    }
+
+    // GIF : GIF87a / GIF89a (rare mais possible)
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return ("gif", OcrMode::Image);
+    }
+
+    ("bin", OcrMode::Unknown)
 }
 
 #[server]
@@ -208,6 +336,180 @@ pub async fn dolibarr_ocr_pdf(bytes: Vec<u8>) -> Result<String, ServerFnError> {
     }
     #[cfg(not(feature = "server"))]
     Err(ServerFnError::new("dolibarr_ocr_pdf est executee cote serveur"))
+}
+
+/// OCR ciblé sur la colonne « Total des cotisations » d'un avis de taxe foncière.
+/// Recette validée : auto-orient + deskew + crop NE 10%x40%+50 + resize 400% + threshold 80% + psm 6.
+#[cfg(feature = "server")]
+async fn ocr_right_column(bytes: Vec<u8>) -> Result<String, String> {
+    let (ext, mode) = detect_image_kind(&bytes);
+
+    if matches!(mode, OcrMode::Unknown) {
+        return Err("Format non reconnu pour OCR colonne droite".into());
+    }
+
+    let remote_input = format!("/tmp/ocr_rc_input.{}", ext);
+    let tmp_path = std::env::temp_dir().join(format!("doli_ocr_rc.{}", ext));
+
+    tokio::fs::write(&tmp_path, &bytes)
+        .await
+        .map_err(|e| format!("Erreur write temp : {}", e))?;
+
+    let cp = tokio::process::Command::new("docker")
+        .args([
+            "cp",
+            &tmp_path.to_string_lossy(),
+            &format!("sci-family-dolibarr:{}", remote_input),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur docker cp : {}", e))?;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    if !cp.status.success() {
+        return Err(format!("Erreur docker cp : {}", String::from_utf8_lossy(&cp.stderr)));
+    }
+
+    let shell_cmd = if matches!(mode, OcrMode::Pdf) {
+        format!(
+            "rm -f /tmp/ocr_rc_step1.jpg /tmp/ocr_rc_col.jpg /tmp/ocr_rc_out.txt && \
+             pdftoppm -png -r 300 {input} /tmp/ocr_rc_page && \
+             FIRST=$(ls /tmp/ocr_rc_page*.png | head -1) && \
+             convert \"$FIRST\" -auto-orient -deskew 40% /tmp/ocr_rc_step1.jpg 2>/dev/null && \
+             convert /tmp/ocr_rc_step1.jpg -gravity NorthEast -crop 10%x40%+50+0 +repage -resize 400% -colorspace Gray -threshold 80% /tmp/ocr_rc_col.jpg 2>/dev/null && \
+             tesseract /tmp/ocr_rc_col.jpg /tmp/ocr_rc_out -l fra --psm 6 2>/dev/null && \
+             cat /tmp/ocr_rc_out.txt 2>/dev/null",
+            input = remote_input
+        )
+    } else {
+        format!(
+            "rm -f /tmp/ocr_rc_step1.jpg /tmp/ocr_rc_col.jpg /tmp/ocr_rc_out.txt && \
+             convert {input} -auto-orient -deskew 40% /tmp/ocr_rc_step1.jpg 2>/dev/null && \
+             convert /tmp/ocr_rc_step1.jpg -gravity NorthEast -crop 10%x40%+50+0 +repage -resize 400% -colorspace Gray -threshold 80% /tmp/ocr_rc_col.jpg 2>/dev/null && \
+             tesseract /tmp/ocr_rc_col.jpg /tmp/ocr_rc_out -l fra --psm 6 2>/dev/null && \
+             cat /tmp/ocr_rc_out.txt 2>/dev/null",
+            input = remote_input
+        )
+    };
+
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", "sci-family-dolibarr", "sh", "-c", &shell_cmd])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur exec OCR colonne droite : {}", e))?;
+
+    if !out.status.success() {
+        return Err(format!(
+            "Erreur OCR colonne droite : {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    // Nettoyage root
+    let cleanup = format!(
+        "rm -f {} /tmp/ocr_rc_step1.jpg /tmp/ocr_rc_col.jpg /tmp/ocr_rc_out.txt /tmp/ocr_rc_page*.png",
+        remote_input
+    );
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", "-u", "root", "sci-family-dolibarr", "sh", "-c", &cleanup])
+        .output()
+        .await;
+
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[server]
+pub async fn dolibarr_ocr_right_column(bytes: Vec<u8>) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        ocr_right_column(bytes).await.map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_ocr_right_column est executee cote serveur"))
+}
+
+/// OCR ciblé sur la colonne droite d'un avis de TF (feuillet 2 - frais).
+/// Recette validée : auto-orient + deskew + crop East 20%x100%+100 + resize 250% + threshold 78% + psm 6.
+#[cfg(feature = "server")]
+async fn ocr_fees_column(bytes: Vec<u8>) -> Result<String, String> {
+    let (ext, mode) = detect_image_kind(&bytes);
+
+    if matches!(mode, OcrMode::Unknown) {
+        return Err("Format non reconnu pour OCR frais".into());
+    }
+
+    let remote_input = format!("/tmp/ocr_fees_input.{}", ext);
+    let tmp_path = std::env::temp_dir().join(format!("doli_ocr_fees.{}", ext));
+
+    tokio::fs::write(&tmp_path, &bytes)
+        .await
+        .map_err(|e| format!("Erreur write temp : {}", e))?;
+
+    let cp = tokio::process::Command::new("docker")
+        .args([
+            "cp",
+            &tmp_path.to_string_lossy(),
+            &format!("sci-family-dolibarr:{}", remote_input),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur docker cp : {}", e))?;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    if !cp.status.success() {
+        return Err(format!("Erreur docker cp : {}", String::from_utf8_lossy(&cp.stderr)));
+    }
+
+    let shell_cmd = if matches!(mode, OcrMode::Pdf) {
+        format!(
+            "rm -f /tmp/ocr_fees_step1.jpg /tmp/ocr_fees_col.jpg /tmp/ocr_fees_out.txt && \
+             pdftoppm -png -r 300 {input} /tmp/ocr_fees_page && \
+             FIRST=$(ls /tmp/ocr_fees_page*.png | head -1) && \
+             convert \"$FIRST\" -auto-orient -deskew 40% /tmp/ocr_fees_step1.jpg 2>/dev/null && \
+             convert /tmp/ocr_fees_step1.jpg -gravity East -crop 20%x100%+100+0 +repage -resize 250% -colorspace Gray -threshold 78% /tmp/ocr_fees_col.jpg 2>/dev/null && \
+             tesseract /tmp/ocr_fees_col.jpg /tmp/ocr_fees_out -l fra --psm 6 2>/dev/null && \
+             cat /tmp/ocr_fees_out.txt 2>/dev/null",
+            input = remote_input
+        )
+    } else {
+        format!(
+            "rm -f /tmp/ocr_fees_step1.jpg /tmp/ocr_fees_col.jpg /tmp/ocr_fees_out.txt && \
+             convert {input} -auto-orient -deskew 40% /tmp/ocr_fees_step1.jpg 2>/dev/null && \
+             convert /tmp/ocr_fees_step1.jpg -gravity East -crop 20%x100%+100+0 +repage -resize 250% -colorspace Gray -threshold 78% /tmp/ocr_fees_col.jpg 2>/dev/null && \
+             tesseract /tmp/ocr_fees_col.jpg /tmp/ocr_fees_out -l fra --psm 6 2>/dev/null && \
+             cat /tmp/ocr_fees_out.txt 2>/dev/null",
+            input = remote_input
+        )
+    };
+
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", "sci-family-dolibarr", "sh", "-c", &shell_cmd])
+        .output()
+        .await
+        .map_err(|e| format!("Erreur exec OCR frais : {}", e))?;
+
+    if !out.status.success() {
+        return Err(format!("Erreur OCR frais : {}", String::from_utf8_lossy(&out.stderr)));
+    }
+
+    let cleanup = format!(
+        "rm -f {} /tmp/ocr_fees_step1.jpg /tmp/ocr_fees_col.jpg /tmp/ocr_fees_out.txt /tmp/ocr_fees_page*.png",
+        remote_input
+    );
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", "-u", "root", "sci-family-dolibarr", "sh", "-c", &cleanup])
+        .output()
+        .await;
+
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+#[server]
+pub async fn dolibarr_ocr_fees_column(bytes: Vec<u8>) -> Result<String, ServerFnError> {
+    #[cfg(feature = "server")]
+    {
+        ocr_fees_column(bytes).await.map_err(ServerFnError::new)
+    }
+    #[cfg(not(feature = "server"))]
+    Err(ServerFnError::new("dolibarr_ocr_fees_column est executee cote serveur"))
 }
 
 // ============================================================
@@ -1280,24 +1582,20 @@ pub async fn dolibarr_get_all_bank_lines_enriched(
 
         let client = DolibarrClient::from_env().map_err(ServerFnError::new)?;
 
-        // 1. Récupère les comptes Dolibarr
         let accounts = client
             .list_bank_accounts()
             .await
             .map_err(ServerFnError::new)?;
 
-        // 2. Prend le premier compte non clôturé
         let Some(account) = accounts.iter().find(|a| a.clos == 0) else {
             return Ok(Vec::new());
         };
 
-        // 3. Récupère les lignes du compte
         let lines = client
             .list_bank_lines(&account.id)
             .await
             .map_err(ServerFnError::new)?;
 
-        // 4. Charge les métadonnées locales (taux TVA par ligne Dolibarr)
         let pool = crate::infrastructure::db().await.map_err(ServerFnError::new)?;
         use sqlx::Row;
         let rows = sqlx::query(
@@ -1315,7 +1613,6 @@ pub async fn dolibarr_get_all_bank_lines_enriched(
             rates.insert(id, rate);
         }
 
-        // 5. Combine
         let enriched: Vec<BankLineEnriched> = lines
             .into_iter()
             .map(|l| {
@@ -1343,7 +1640,6 @@ pub async fn dolibarr_get_all_bank_lines_enriched(
 }
 
 /// Attribue (ou efface) un taux de TVA à une ligne bancaire Dolibarr.
-/// vat_rate_bp : Some(2000) pour 20%, Some(0) pour exonérée, None pour effacer.
 #[server]
 pub async fn dolibarr_set_bank_line_vat_rate(
     dolibarr_line_id: String,

@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 mod assistant_overlay;
 mod dashboard;
+mod tax_fonciere;
 pub use dashboard::adapters::bank_tx_from_item;
 pub use dashboard::vat::VatWidget;
 
@@ -63,6 +64,7 @@ enum Page {
     Audit,
     ZeroSaisie,
     Security,
+    TaxFonciere,
 }
 impl Page {
     fn label(self) -> &'static str {
@@ -94,6 +96,7 @@ impl Page {
             Page::Audit => "Audit",
             Page::ZeroSaisie => "À vérifier",
             Page::Security => "Sécurité / Recovery",
+            Page::TaxFonciere => "Taxe foncière",
         }
     }
 
@@ -207,6 +210,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                         NavItem{page,current:Page::Treasury}
                         NavItem{page,current:Page::Associates}
                         NavItem{page,current:Page::Rentals}
+                        NavItem{page,current:Page::TaxFonciere}
                         NavItem{page,current:Page::EInvoice}
                         NavItem{page,current:Page::Assistant}
                         NavItem{page,current:Page::Vat}
@@ -269,6 +273,7 @@ fn AuthenticatedShell(auth_status:crate::security::AuthStatusItem,on_logout:Even
                 Page::Tenants=>rsx!{TenantsPage{refresh}},                Page::ThirdParties=>rsx!{crate::ui::dashboard::tiers_dolibarr::ThirdPartiesDolibarrPage{refresh}},
                 Page::Patrimony=>rsx!{PatrimonyPage{refresh}},
                 Page::Rentals=>rsx!{LeasesPage{refresh}},
+                Page::TaxFonciere=>rsx!{tax_fonciere::TaxFoncierePage{refresh}},
                 Page::Billing=>rsx!{crate::ui::dashboard::invoices_dolibarr::InvoicesDolibarrPage{refresh}},
                 Page::EInvoice=>rsx!{EInvoicePage{refresh}},
                 Page::Assistant=>rsx!{AssistantPage{refresh}},

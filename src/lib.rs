@@ -34,3 +34,4 @@ pub mod prevision;
 pub mod dolibarr;
 pub mod email;
 pub mod relances;
+pub mod tax_fonciere;

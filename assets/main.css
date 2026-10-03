@@ -1637,3 +1637,72 @@ button.logout-button {
     border-radius: 10px !important;
     font-size: 0.8rem !important;
 }
+
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: grayscale(50%);
+}
+
+/* ============================================================
+   Barre de progression indéterminée (upload/OCR)
+   ============================================================ */
+
+.progress-bar {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    background: rgba(148, 163, 184, 0.15);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 12px;
+}
+
+.progress-bar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 40%;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        #10b981 20%,
+        #34d399 50%,
+        #10b981 80%,
+        transparent 100%
+    );
+    border-radius: 6px;
+    animation: progress-slide 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+}
+
+@keyframes progress-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
+.progress-hint {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.progress-hint::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10b981;
+    animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.8); }
+}
